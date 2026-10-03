@@ -288,9 +288,8 @@ impl App {
 
     pub fn next(&mut self) {
         let (repeat, shuffle) = (self.cfg.repeat, self.cfg.shuffle);
-        let list = self.playing_list;
         if let Some(i) = self.playing().next(repeat, shuffle, false) {
-            self.play_index(list, i);
+            self.play_index(self.playing_list, i);
         }
     }
 
@@ -302,9 +301,8 @@ impl App {
             return;
         }
         let (repeat, shuffle) = (self.cfg.repeat, self.cfg.shuffle);
-        let list = self.playing_list;
         if let Some(i) = self.playing().prev(repeat, shuffle) {
-            self.play_index(list, i);
+            self.play_index(self.playing_list, i);
         }
     }
 
@@ -579,13 +577,14 @@ impl App {
             self.playlists.push(d);
         }
         let fix = |i: usize| if i > idx { i - 1 } else { i };
+        self.active = fix(self.active).min(self.playlists.len() - 1);
         if self.playing_list == idx {
-            self.playing_list = usize::MAX;
+            // The track keeps playing; next/prev continue in the visible list.
+            self.playing_list = self.active;
             self.audio.send(Command::PrefetchNext(None));
         } else {
             self.playing_list = fix(self.playing_list);
         }
-        self.active = fix(self.active).min(self.playlists.len() - 1);
         // Positions of the remaining lists changed.
         for p in &mut self.playlists {
             p.dirty = true;
@@ -669,11 +668,8 @@ impl App {
                 }
                 Event::TrackEnded => {
                     let (repeat, shuffle) = (self.cfg.repeat, self.cfg.shuffle);
-                    let list = self.playing_list;
-                    if list < self.playlists.len()
-                        && let Some(i) = self.playing().next(repeat, shuffle, true)
-                    {
-                        self.play_index(list, i);
+                    if let Some(i) = self.playing().next(repeat, shuffle, true) {
+                        self.play_index(self.playing_list, i);
                     }
                 }
                 Event::Seeked(pos) => self.mpris.send(MprisUpdate::Seeked(pos)),
