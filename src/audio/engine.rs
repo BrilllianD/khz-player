@@ -70,10 +70,19 @@ pub fn run(
         eof: false,
     };
     loop {
-        let cmd = match rx.recv_timeout(IDLE_WAIT) {
-            Ok(c) => Some(c),
-            Err(RecvTimeoutError::Timeout) => None,
-            Err(RecvTimeoutError::Disconnected) => break,
+        // Only playback (or a gapless mark still to cross) needs ticks; otherwise
+        // nothing changes until the next command, so sleep until it arrives.
+        let cmd = if e.state == PlayerState::Playing || !e.transitions.is_empty() {
+            match rx.recv_timeout(IDLE_WAIT) {
+                Ok(c) => Some(c),
+                Err(RecvTimeoutError::Timeout) => None,
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+        } else {
+            match rx.recv() {
+                Ok(c) => Some(c),
+                Err(_) => break,
+            }
         };
         if let Some(c) = cmd {
             if !e.handle(c) {
@@ -459,6 +468,41 @@ mod tests {
 
         tx.send(Command::Shutdown).unwrap();
         eng.join().unwrap();
+        stop.store(true, Ordering::Relaxed);
+        cb.join().unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn idle_engine_wakes_on_commands_and_exits_on_disconnect() {
+        let dir = std::env::temp_dir().join(format!("rmp-idle-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.wav");
+        crate::library::scanner::tests::write_wav(&path, 8000);
+
+        let shared = Arc::new(Shared::new(1.0, 0.0));
+        let (ring_tx, ring_rx) = rtrb::RingBuffer::new(48000 * 2 * 3 / 10);
+        let stop = Arc::new(AtomicBool::new(false));
+        let cb = {
+            let (s, st) = (shared.clone(), stop.clone());
+            std::thread::spawn(move || fake_callback(s, ring_rx, st))
+        };
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let (ev_tx, ev_rx) = crossbeam_channel::unbounded();
+        let eng = std::thread::spawn(move || run(rx, ev_tx, shared, ring_tx, egui::Context::default()));
+
+        // Stopped: the engine is blocked on the channel and must still react.
+        std::thread::sleep(Duration::from_millis(50));
+        tx.send(Command::Load { path, play: true }).unwrap();
+        wait_for(&ev_rx, |e| matches!(e, Event::StateChanged(PlayerState::Playing)), 5);
+        tx.send(Command::Stop).unwrap();
+        wait_for(&ev_rx, |e| matches!(e, Event::StateChanged(PlayerState::Stopped)), 5);
+
+        // Dropping the sender while blocked ends the thread.
+        let t0 = Instant::now();
+        drop(tx);
+        eng.join().unwrap();
+        assert!(t0.elapsed() < Duration::from_secs(1));
         stop.store(true, Ordering::Relaxed);
         cb.join().unwrap();
         std::fs::remove_dir_all(dir).unwrap();
