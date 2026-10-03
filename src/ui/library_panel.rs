@@ -4,6 +4,7 @@ use egui::{CollapsingHeader, RichText, Ui};
 
 use crate::app::App;
 use crate::library::{Track, format_duration};
+use crate::theme::Theme;
 
 pub struct Album {
     pub name: String,
@@ -40,7 +41,7 @@ fn matches(t: &Track, terms: &[String]) -> bool {
 }
 
 /// Rebuilds the grouped view when the library or the query changes.
-fn refresh(cache: &mut Cache, library: &[Track], generation: u64, query: &str) {
+pub fn refresh(cache: &mut Cache, library: &[Track], generation: u64, query: &str) {
     let key = (generation, query.to_string());
     if cache.key.as_ref() == Some(&key) {
         return;
@@ -100,7 +101,7 @@ fn refresh(cache: &mut Cache, library: &[Track], generation: u64, query: &str) {
     cache.key = Some(key);
 }
 
-enum Act {
+pub enum Act {
     Add(Vec<usize>),
     Replace(Vec<usize>),
 }
@@ -170,12 +171,25 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     });
     ui.separator();
 
+    if let Some(a) = tree(ui, &app.library_cache, &app.library, searching, &theme) {
+        act = Some(a);
+    }
+
+    match act {
+        Some(Act::Add(v)) => app.add_library_tracks(&v, false),
+        Some(Act::Replace(v)) => app.add_library_tracks(&v, true),
+        None => {}
+    }
+}
+
+/// Artist > Album > Track tree for the cached view; returns the requested action.
+pub fn tree(ui: &mut Ui, cache: &Cache, lib: &[Track], searching: bool, theme: &Theme) -> Option<Act> {
+    let mut act: Option<Act> = None;
     egui::ScrollArea::vertical()
         .id_salt("library-tree")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            let lib = &app.library;
-            for artist in &app.library_cache.artists {
+            for artist in &cache.artists {
                 let all: Vec<usize> = artist
                     .albums
                     .iter()
@@ -186,7 +200,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                         .color(theme.text_bright),
                 )
                 .id_salt(("artist", &artist.name))
-                .open(if searching && app.library_cache.matches <= 200 { Some(true) } else { None })
+                .open(if searching && cache.matches <= 200 { Some(true) } else { None })
                 .show(ui, |ui| {
                     for album in &artist.albums {
                         let year = album
@@ -199,7 +213,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                             RichText::new(format!("{}{year}", album.name)).color(theme.text),
                         )
                         .id_salt(("album", &artist.name, &album.name))
-                        .open(if searching && app.library_cache.matches <= 60 { Some(true) } else { None })
+                        .open(if searching && cache.matches <= 60 { Some(true) } else { None })
                         .show(ui, |ui| {
                             for &i in &album.tracks {
                                 let t = &lib[i];
@@ -254,10 +268,5 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 });
             }
         });
-
-    match act {
-        Some(Act::Add(v)) => app.add_library_tracks(&v, false),
-        Some(Act::Replace(v)) => app.add_library_tracks(&v, true),
-        None => {}
-    }
+    act
 }

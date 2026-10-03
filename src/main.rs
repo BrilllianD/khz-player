@@ -1,19 +1,6 @@
-mod app;
-mod audio;
-mod config;
-mod eq_presets;
-mod fonts;
-mod library;
-mod m3u;
-mod mpris;
-mod playlist;
-mod shortcuts;
-mod theme;
-mod theme_watch;
-mod ui;
-
 use std::path::PathBuf;
 
+use rmp::{app, config, ui};
 use tracing_subscriber::EnvFilter;
 
 fn main() -> eframe::Result {
