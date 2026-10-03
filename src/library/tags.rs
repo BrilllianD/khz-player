@@ -34,7 +34,35 @@ pub fn file_stamp(path: &Path) -> (i64, i64) {
 }
 
 fn clean(s: Option<std::borrow::Cow<'_, str>>) -> Option<String> {
-    s.map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+    s.map(|v| fix_cp1251(v.trim()))
+        .filter(|v| !v.is_empty())
+}
+
+/// Old Russian rips store CP1251 bytes in tags declared as Latin-1, which decode
+/// to strings like "ËÅÌÏÉÀÄÀ". Re-decode when the text is only Latin-1 and most
+/// of its letters fall in the CP1251 Cyrillic range (0xC0..=0xFF).
+pub fn fix_cp1251(s: &str) -> String {
+    if s.chars().any(|c| c as u32 > 0xFF) {
+        return s.to_string();
+    }
+    let letters = s.chars().filter(|c| c.is_alphabetic()).count();
+    let high = s.chars().filter(|&c| (0xC0..=0xFF).contains(&(c as u32))).count();
+    if high == 0 || high * 2 < letters {
+        return s.to_string();
+    }
+    s.chars()
+        .map(|c| match c as u32 {
+            b @ 0xC0..=0xFF => char::from_u32(0x0410 + (b - 0xC0)).unwrap_or(c),
+            0xA8 => 'Ё',
+            0xB8 => 'ё',
+            0xB9 => '№',
+            0xAB => '«',
+            0xBB => '»',
+            0x96 => '–',
+            0x97 => '—',
+            _ => c,
+        })
+        .collect()
 }
 
 /// Reads metadata; on failure returns a track with only path and file stamp,
@@ -84,3 +112,23 @@ pub fn read(path: &Path) -> Track {
 }
 
 
+
+#[cfg(test)]
+mod tests {
+    use super::fix_cp1251;
+
+    #[test]
+    fn cp1251_mojibake_is_repaired() {
+        assert_eq!(fix_cp1251("Ïðèâåò"), "Привет");
+        assert_eq!(fix_cp1251("Àðèÿ - Îáìàí"), "Ария - Обман");
+        assert_eq!(fix_cp1251("¨æèê"), "Ёжик");
+    }
+
+    #[test]
+    fn real_latin1_and_unicode_untouched() {
+        assert_eq!(fix_cp1251("Beyoncé"), "Beyoncé");
+        assert_eq!(fix_cp1251("Sigur Rós - Hoppípolla"), "Sigur Rós - Hoppípolla");
+        assert_eq!(fix_cp1251("Ария"), "Ария");
+        assert_eq!(fix_cp1251("Plain ASCII"), "Plain ASCII");
+    }
+}

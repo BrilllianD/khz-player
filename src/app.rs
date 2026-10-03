@@ -792,6 +792,7 @@ impl App {
             .as_ref()
             .is_some_and(|w| w.changed.try_recv().is_ok());
         if changed {
+            tracing::debug!("theme files changed, reloading");
             let t = Theme::load();
             if t != self.theme {
                 tracing::info!("theme changed: {}", t.name);

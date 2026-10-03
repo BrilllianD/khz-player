@@ -91,3 +91,65 @@ fn scan(
         removed,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_wav(path: &std::path::Path, frames: u32) {
+        let data_len = frames * 2;
+        let mut b = Vec::new();
+        b.extend_from_slice(b"RIFF");
+        b.extend_from_slice(&(36 + data_len).to_le_bytes());
+        b.extend_from_slice(b"WAVEfmt ");
+        b.extend_from_slice(&16u32.to_le_bytes());
+        b.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        b.extend_from_slice(&1u16.to_le_bytes()); // mono
+        b.extend_from_slice(&8000u32.to_le_bytes());
+        b.extend_from_slice(&16000u32.to_le_bytes());
+        b.extend_from_slice(&2u16.to_le_bytes());
+        b.extend_from_slice(&16u16.to_le_bytes());
+        b.extend_from_slice(b"data");
+        b.extend_from_slice(&data_len.to_le_bytes());
+        b.resize(b.len() + data_len as usize, 0);
+        std::fs::write(path, b).unwrap();
+    }
+
+    fn run(root: &std::path::Path, db: &std::path::Path) -> (usize, usize, usize) {
+        match scan(&[root.to_path_buf()], db, &|_| {}).unwrap() {
+            ScanEvent::Done {
+                tracks,
+                updated,
+                removed,
+            } => (tracks.len(), updated, removed),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn incremental_rescan() {
+        let dir = std::env::temp_dir().join(format!("rmp-scan-{}", std::process::id()));
+        let music = dir.join("music");
+        std::fs::create_dir_all(music.join("sub")).unwrap();
+        let db = dir.join("lib.db");
+        write_wav(&music.join("a.wav"), 8000);
+        write_wav(&music.join("sub/b.wav"), 16000);
+        std::fs::write(music.join("notes.txt"), "x").unwrap();
+
+        assert_eq!(run(&music, &db), (2, 2, 0));
+        assert_eq!(run(&music, &db), (2, 0, 0));
+
+        // Changed size => re-read only that file.
+        write_wav(&music.join("a.wav"), 4000);
+        assert_eq!(run(&music, &db), (2, 1, 0));
+
+        std::fs::remove_file(music.join("sub/b.wav")).unwrap();
+        assert_eq!(run(&music, &db), (1, 0, 1));
+
+        let conn = db::open(&db).unwrap();
+        let t = &db::load_tracks(&conn).unwrap()[0];
+        assert_eq!(t.duration_ms, Some(500));
+        assert_eq!(t.display_title(), "a");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

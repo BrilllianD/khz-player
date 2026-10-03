@@ -72,10 +72,10 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     if version < 1 {
         conn.execute_batch(&format!("BEGIN; {SCHEMA_V1} PRAGMA user_version = 1; COMMIT;"))?;
     }
-    if version < 2 {
-        // Tag reading switched to relaxed parsing; drop cached metadata so the
-        // next scan re-reads every file. Playlists keep their paths.
-        conn.execute_batch("BEGIN; DELETE FROM tracks; PRAGMA user_version = 2; COMMIT;")?;
+    if version < 3 {
+        // Tag reading changed (relaxed parsing, CP1251 repair); drop cached
+        // metadata so the next scan re-reads every file. Playlists keep their paths.
+        conn.execute_batch("BEGIN; DELETE FROM tracks; PRAGMA user_version = 3; COMMIT;")?;
     }
     Ok(())
 }
@@ -304,7 +304,7 @@ mod tests {
         let v: i64 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 2);
+        assert_eq!(v, 3);
     }
 
     #[test]
