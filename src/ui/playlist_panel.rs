@@ -111,6 +111,12 @@ fn rows(app: &mut App, ui: &mut Ui) {
     let mut clicked: Option<(usize, egui::Modifiers)> = None;
     let mut play: Option<usize> = None;
     let mut remove_ctx = false;
+    // Drag-reorder: set when a row drag starts, cleared on release.
+    let drag_id = egui::Id::new(("pl-drag", active));
+    let dragging = ui.ctx().data(|d| d.get_temp::<bool>(drag_id)).unwrap_or(false);
+    let pointer = ui.input(|i| i.pointer.interact_pos());
+    let mut drag_start: Option<usize> = None;
+    let mut drop_gap: Option<usize> = None;
 
     let mut area = egui::ScrollArea::vertical()
         .id_salt(("pl-rows", active))
@@ -126,7 +132,7 @@ fn rows(app: &mut App, ui: &mut Ui) {
         for i in range {
             let t = &pl.tracks[i];
             let (rect, resp) =
-                ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
+                ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click_and_drag());
             let selected = pl.selected.contains(&i);
             let current = is_playing_list && pl.current == Some(i);
             let p = ui.painter();
@@ -169,6 +175,18 @@ fn rows(app: &mut App, ui: &mut Ui) {
                 font.clone(),
                 color,
             );
+            if resp.drag_started() {
+                drag_start = Some(i);
+            }
+            if dragging
+                && let Some(pos) = pointer
+                && (rect.top()..rect.bottom()).contains(&pos.y)
+            {
+                let gap = if pos.y < rect.center().y { i } else { i + 1 };
+                let y = if gap == i { rect.top() } else { rect.bottom() };
+                p.hline(rect.x_range(), y, egui::Stroke::new(2.0, theme.accent));
+                drop_gap = Some(gap);
+            }
             if resp.double_clicked() {
                 play = Some(i);
             } else if resp.clicked() {
@@ -190,7 +208,38 @@ fn rows(app: &mut App, ui: &mut Ui) {
                 ui.label(RichText::new(t.path.to_string_lossy()).small().color(theme.text_dim));
             });
         }
+        // Scroll while dragging near the top or bottom edge.
+        if dragging && let Some(pos) = pointer {
+            let clip = ui.clip_rect();
+            if pos.y < clip.top() + ROW_H {
+                ui.scroll_with_delta(vec2(0.0, 6.0));
+            } else if pos.y > clip.bottom() - ROW_H {
+                ui.scroll_with_delta(vec2(0.0, -6.0));
+            }
+        }
     });
+
+    if let Some(i) = drag_start {
+        let pl = &mut app.playlists[active];
+        if !pl.selected.contains(&i) {
+            pl.selected.clear();
+            pl.selected.insert(i);
+            pl.anchor = Some(i);
+        }
+        ui.ctx().data_mut(|d| d.insert_temp(drag_id, true));
+    }
+    if dragging {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        ui.ctx().request_repaint();
+        if ui.input(|i| i.pointer.any_released()) {
+            ui.ctx().data_mut(|d| d.remove::<bool>(drag_id));
+            if let Some(gap) = drop_gap
+                && app.playlists[active].move_selected(gap)
+            {
+                app.after_playlist_edit();
+            }
+        }
+    }
 
     let pl = &mut app.playlists[active];
     if let Some((i, m)) = clicked {

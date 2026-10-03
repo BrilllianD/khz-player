@@ -162,6 +162,39 @@ impl Playlist {
         self.dirty = true;
     }
 
+    /// Moves the selected tracks as one block so it starts at gap `to`
+    /// (0..=len, counted in the list before the move). Order inside the block
+    /// is kept; `current`, selection and anchor follow their tracks.
+    /// Returns false when nothing moved.
+    pub fn move_selected(&mut self, to: usize) -> bool {
+        let n = self.tracks.len();
+        let to = to.min(n);
+        let order: Vec<usize> = (0..to)
+            .filter(|i| !self.selected.contains(i))
+            .chain(self.selected.iter().copied().filter(|&i| i < n))
+            .chain((to..n).filter(|i| !self.selected.contains(i)))
+            .collect();
+        if order.iter().enumerate().all(|(new, &old)| new == old) {
+            return false;
+        }
+        let mut new_pos = vec![0; n];
+        for (new, &old) in order.iter().enumerate() {
+            new_pos[old] = new;
+        }
+        let mut old: Vec<Option<Track>> =
+            std::mem::take(&mut self.tracks).into_iter().map(Some).collect();
+        self.tracks = order
+            .iter()
+            .map(|&i| old[i].take().expect("index used once"))
+            .collect();
+        self.current = self.current.map(|c| new_pos[c]);
+        self.anchor = self.anchor.map(|a| new_pos[a]);
+        self.selected = self.selected.iter().map(|&i| new_pos[i]).collect();
+        self.invalidate_shuffle();
+        self.dirty = true;
+        true
+    }
+
     pub fn reverse(&mut self) {
         self.tracks.reverse();
         let n = self.tracks.len();
@@ -415,5 +448,51 @@ mod tests {
         let mut p = pl(0);
         assert_eq!(p.next(Repeat::All, true, true), None);
         assert_eq!(p.prev(Repeat::All, false), None);
+    }
+
+    fn names(p: &Playlist) -> Vec<String> {
+        p.tracks.iter().map(|t| t.display_title()).collect()
+    }
+
+    #[test]
+    fn move_selected_down_and_up() {
+        let mut p = pl(5);
+        p.selected = [1].into();
+        assert!(p.move_selected(4));
+        assert_eq!(names(&p), ["0", "2", "3", "1", "4"]);
+        assert_eq!(p.selected, [3].into());
+
+        assert!(p.move_selected(0));
+        assert_eq!(names(&p), ["1", "0", "2", "3", "4"]);
+        assert_eq!(p.selected, [0].into());
+        assert!(p.dirty);
+    }
+
+    #[test]
+    fn move_selected_block_keeps_order_and_current() {
+        let mut p = pl(6);
+        p.current = Some(4);
+        p.selected = [0, 2, 4].into();
+        p.anchor = Some(2);
+        assert!(p.move_selected(6));
+        assert_eq!(names(&p), ["1", "3", "5", "0", "2", "4"]);
+        assert_eq!(p.selected, [3, 4, 5].into());
+        assert_eq!(p.current, Some(5));
+        assert_eq!(p.anchor, Some(4));
+        assert_eq!(p.current_track().unwrap().display_title(), "4");
+    }
+
+    #[test]
+    fn move_selected_noop() {
+        let mut p = pl(4);
+        p.dirty = false;
+        p.selected = [1, 2].into();
+        // Dropping inside or at either edge of the block changes nothing.
+        for to in [1, 2, 3] {
+            assert!(!p.move_selected(to));
+        }
+        p.selected.clear();
+        assert!(!p.move_selected(0));
+        assert!(!p.dirty);
     }
 }
