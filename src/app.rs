@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -78,6 +79,10 @@ pub struct App {
     pub active: usize,
     /// Playlist the playing track belongs to.
     pub playing_list: usize,
+    /// Files that failed to load this session (shown muted in the playlist).
+    pub failed: HashSet<PathBuf>,
+    /// Tracks skipped in a row because they failed to load.
+    load_failures: usize,
 
     pub library: Vec<Track>,
     pub library_gen: u64,
@@ -195,6 +200,8 @@ impl App {
             playlists,
             active,
             playing_list: active,
+            failed: HashSet::new(),
+            load_failures: 0,
             library,
             library_gen: 0,
             scan: None,
@@ -670,6 +677,14 @@ impl App {
                     }
                 }
                 Event::Seeked(pos) => self.mpris.send(MprisUpdate::Seeked(pos)),
+                Event::LoadFailed { path, msg, play } => {
+                    let name = path.file_name().unwrap_or_default().to_string_lossy();
+                    self.toast(format!("{name}: {msg}"));
+                    self.failed.insert(path.clone());
+                    if play {
+                        self.skip_failed(&path);
+                    }
+                }
                 Event::Error { path, msg } => {
                     let name = path
                         .as_ref()
@@ -684,7 +699,25 @@ impl App {
         }
     }
 
+    /// Moves on from a track that could not be loaded, unless every track of
+    /// the list has failed in a row.
+    fn skip_failed(&mut self, path: &Path) {
+        let pl = self.playing();
+        if pl.current_track().is_none_or(|t| t.path != path) {
+            return;
+        }
+        let len = pl.len();
+        self.load_failures += 1;
+        if self.load_failures < len {
+            self.next();
+        } else {
+            self.load_failures = 0;
+        }
+    }
+
     fn on_track_started(&mut self, info: TrackInfo, gapless: bool) {
+        self.load_failures = 0;
+        self.failed.remove(&info.path);
         if gapless && self.playing_list < self.playlists.len() {
             // The engine moved on by itself; advance the playlist pointer to match.
             let (repeat, shuffle) = (self.cfg.repeat, self.cfg.shuffle);

@@ -49,6 +49,9 @@ pub enum Event {
     /// Current track finished and nothing was prefetched.
     TrackEnded,
     Seeked(Duration),
+    /// `Load`/`Resume` could not open the file; `play` is whether playback
+    /// was requested.
+    LoadFailed { path: PathBuf, msg: String, play: bool },
     Error { path: Option<PathBuf>, msg: String },
 }
 

@@ -29,7 +29,7 @@ struct Engine {
     out_rate: u32,
     state: PlayerState,
     cur: Option<Current>,
-    /// Path of the last loaded track, so Play after Stop restarts it.
+    /// Path of the audible track, so Play after Stop restarts it.
     last_path: Option<PathBuf>,
     next: Option<(PathBuf, Decoder)>,
     /// Decoded, resampled frames not yet pushed to the ring.
@@ -121,7 +121,9 @@ impl Engine {
         self.shared.consumed.load(Ordering::Acquire) as i64
     }
 
-    /// Discards everything buffered in the ring and waits for the callback to do it.
+    /// Discards everything buffered in the ring and waits for the callback to
+    /// do it. Pending transitions are dropped: callers that keep the current
+    /// decoder must announce them first.
     fn flush(&mut self) {
         self.buf.clear();
         self.buf_pos = 0;
@@ -134,10 +136,12 @@ impl Engine {
             tracing::debug!("flush not acknowledged by audio callback");
         }
         self.pushed_total = self.consumed();
-        // Any pending transition would have been audible from frames that are now gone.
-        while let Some((_, info)) = self.transitions.pop_front() {
-            self.emit(Event::Advanced(info));
-        }
+        self.transitions.clear();
+    }
+
+    fn advanced(&mut self, info: TrackInfo) {
+        self.last_path = Some(info.path.clone());
+        self.emit(Event::Advanced(info));
     }
 
     /// Returns false on shutdown.
@@ -197,7 +201,6 @@ impl Engine {
 
     fn open_current(&mut self, decoder: Decoder) -> anyhow::Result<()> {
         let resampler = Resampler::new(decoder.info.sample_rate, self.out_rate)?;
-        self.last_path = Some(decoder.info.path.clone());
         self.cur = Some(Current { decoder, resampler });
         self.eof = false;
         Ok(())
@@ -218,6 +221,7 @@ impl Engine {
                 self.shared
                     .track_start
                     .store(self.consumed(), Ordering::Release);
+                self.last_path = Some(info.path.clone());
                 self.emit(Event::Loaded(info));
                 self.set_state(if play {
                     PlayerState::Playing
@@ -229,9 +233,10 @@ impl Engine {
                 tracing::warn!("cannot play {}: {e:#}", path.display());
                 self.last_path = Some(path.clone());
                 self.set_state(PlayerState::Stopped);
-                self.emit(Event::Error {
-                    path: Some(path),
+                self.emit(Event::LoadFailed {
+                    path,
                     msg: format!("{e:#}"),
+                    play,
                 });
             }
         }
@@ -251,6 +256,11 @@ impl Engine {
     fn seek(&mut self, pos: Duration) {
         if self.cur.is_none() {
             return;
+        }
+        // The current decoder may already be a gapless successor whose first
+        // frames are about to be discarded: it becomes current right now.
+        while let Some((_, info)) = self.transitions.pop_front() {
+            self.advanced(info);
         }
         self.flush();
         let cur = self.cur.as_mut().expect("current");
@@ -381,7 +391,7 @@ impl Engine {
             }
             let (mark, info) = self.transitions.pop_front().expect("front");
             self.shared.track_start.store(mark, Ordering::Release);
-            self.emit(Event::Advanced(info));
+            self.advanced(info);
         }
         if self.state == PlayerState::Playing
             && self.eof
@@ -506,6 +516,75 @@ mod tests {
         stop.store(true, Ordering::Relaxed);
         cb.join().unwrap();
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn test_engine() -> (Engine, Receiver<Event>, rtrb::Consumer<f32>) {
+        let shared = Arc::new(Shared::new(1.0, 0.0));
+        let (ring, ring_rx) = rtrb::RingBuffer::new(48000 * 2 * 3 / 10);
+        let (ev_tx, ev_rx) = crossbeam_channel::unbounded();
+        let e = Engine {
+            events: ev_tx,
+            out_rate: shared.out_rate(),
+            shared,
+            ring,
+            repaint: egui::Context::default(),
+            state: PlayerState::Stopped,
+            cur: None,
+            last_path: None,
+            next: None,
+            buf: Vec::new(),
+            buf_pos: 0,
+            scratch: Vec::new(),
+            pushed_total: 0,
+            transitions: VecDeque::new(),
+            eof: false,
+        };
+        (e, ev_rx, ring_rx)
+    }
+
+    #[test]
+    fn load_during_pending_transition_emits_no_advanced() {
+        let dir = crate::config::test_dir("engine-pending");
+        let [a, b, c] = ["a.wav", "b.wav", "c.wav"].map(|n| dir.join(n));
+        for p in [&a, &b, &c] {
+            crate::library::scanner::tests::write_wav(p, 800);
+        }
+        let (mut e, events, mut ring) = test_engine();
+        e.load(a, true);
+        e.prefetch(Some(b.clone()));
+        // A is shorter than the ring: decoding runs into B without any of A
+        // being played, so the switch to B is pending.
+        e.fill();
+        assert_eq!(e.transitions.len(), 1);
+        assert_eq!(e.last_path.as_deref(), Some(dir.join("a.wav").as_path()));
+
+        e.load(c.clone(), true);
+        let evs: Vec<Event> = events.try_iter().collect();
+        assert!(!evs.iter().any(|ev| matches!(ev, Event::Advanced(_))), "{evs:?}");
+        assert!(matches!(evs.last(), Some(Event::Loaded(i)) if i.path == c), "{evs:?}");
+
+        // Stop drops a pending switch too, and Play then restarts the audible track.
+        while ring.pop().is_ok() {}
+        e.prefetch(Some(b));
+        e.fill();
+        assert_eq!(e.transitions.len(), 1);
+        e.stop();
+        assert!(!events.try_iter().any(|ev| matches!(ev, Event::Advanced(_))));
+        assert_eq!(e.last_path.as_ref(), Some(&c));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn load_failure_emits_load_failed() {
+        let (mut e, events, _ring) = test_engine();
+        let path = PathBuf::from("/nonexistent/rmp-test.mp3");
+        e.load(path.clone(), true);
+        let evs: Vec<Event> = events.try_iter().collect();
+        assert!(
+            evs.iter().any(|ev| matches!(ev, Event::LoadFailed { path: p, play: true, .. } if *p == path)),
+            "{evs:?}"
+        );
+        assert_eq!(e.state, PlayerState::Stopped);
     }
 
     /// Needs a real file: `RMP_TEST_FILE=/path/song.mp3 cargo test engine_real -- --ignored`.
