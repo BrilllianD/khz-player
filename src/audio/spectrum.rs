@@ -27,6 +27,8 @@ pub struct Spectrum {
     output: Vec<Complex<f32>>,
     scratch: Vec<Complex<f32>>,
     edges: [usize; BARS + 1],
+    /// `tilt_db(k)` per bar.
+    tilt: [f32; BARS],
     rate: u32,
     pub bars: [f32; BARS],
     pub peaks: [f32; BARS],
@@ -60,6 +62,7 @@ impl Spectrum {
             output,
             scratch,
             edges: [0; BARS + 1],
+            tilt: std::array::from_fn(tilt_db),
             rate,
             bars: [0.0; BARS],
             peaks: [0.0; BARS],
@@ -116,12 +119,12 @@ impl Spectrum {
                 for (k, t) in target.iter_mut().enumerate() {
                     let lo = self.edges[k];
                     let hi = self.edges[k + 1].max(lo + 1);
-                    let mag = self.output[lo..hi.min(self.output.len())]
+                    let peak_sqr = self.output[lo..hi.min(self.output.len())]
                         .iter()
-                        .map(|c| c.norm())
-                        .fold(0.0f32, f32::max)
-                        * norm;
-                    let db = 20.0 * mag.max(1e-9).log10() + tilt_db(k);
+                        .map(|c| c.norm_sqr())
+                        .fold(0.0f32, f32::max);
+                    let mag = peak_sqr.sqrt() * norm;
+                    let db = 20.0 * mag.max(1e-9).log10() + self.tilt[k];
                     *t = ((db - DB_FLOOR) / -DB_FLOOR).clamp(0.0, 1.0);
                 }
             }
