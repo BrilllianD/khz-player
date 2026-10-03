@@ -19,6 +19,8 @@ use crate::ui;
 use crate::{fonts, m3u};
 
 const SAVE_DEBOUNCE: Duration = Duration::from_secs(1);
+/// Save anyway after this long of continuous changes (a long slider drag).
+const SAVE_CAP: Duration = Duration::from_secs(10);
 const TOAST_TIME: Duration = Duration::from_secs(5);
 
 /// Text prompt shown as a modal (no native file dialogs).
@@ -49,7 +51,11 @@ pub struct JumpState {
 pub struct App {
     ctx: egui::Context,
     pub cfg: Config,
+    /// Last and first unsaved change to the config or a playlist.
     cfg_changed: Option<Instant>,
+    cfg_first_change: Option<Instant>,
+    /// A playlist save failed and the user was told; reset by a good save.
+    save_failed: bool,
     pub theme: Theme,
     theme_watch: Option<ThemeWatcher>,
     pub nerd_font: bool,
@@ -172,6 +178,8 @@ impl App {
             user_presets,
             cfg,
             cfg_changed: None,
+            cfg_first_change: None,
+            save_failed: false,
             theme,
             theme_watch,
             nerd_font,
@@ -244,7 +252,9 @@ impl App {
     }
 
     pub fn mark_cfg(&mut self) {
-        self.cfg_changed.get_or_insert_with(Instant::now);
+        let now = Instant::now();
+        self.cfg_first_change.get_or_insert(now);
+        self.cfg_changed = Some(now);
     }
 
     // ---------------------------------------------------------------- playback
@@ -885,14 +895,29 @@ impl App {
     }
 
     fn save_now(&mut self) {
+        let mut error = None;
+        let mut saved = false;
         if let Some(db) = &mut self.db {
             for (i, p) in self.playlists.iter_mut().enumerate() {
-                if p.dirty
-                    && let Err(e) = db::save_playlist(db, p, i)
-                {
-                    tracing::warn!("save playlist {}: {e}", p.name);
+                if !p.dirty {
+                    continue;
+                }
+                // Cleared even on failure: retrying every second would not help.
+                p.dirty = false;
+                match db::save_playlist(db, p, i) {
+                    Ok(()) => saved = true,
+                    Err(e) => error = Some(format!("Could not save playlist {}: {e}", p.name)),
                 }
             }
+        }
+        match error {
+            Some(msg) if !self.save_failed => {
+                self.save_failed = true;
+                self.toast(msg);
+            }
+            Some(msg) => tracing::warn!("{msg}"),
+            None if saved => self.save_failed = false,
+            None => {}
         }
         // Remember the list that is playing, so the next start resumes it.
         let list = if self.now.is_some() { self.playing_list } else { self.active };
@@ -904,6 +929,7 @@ impl App {
             tracing::warn!("save config: {e}");
         }
         self.cfg_changed = None;
+        self.cfg_first_change = None;
     }
 
     fn remember_window(&mut self, ctx: &egui::Context) {
@@ -946,16 +972,15 @@ impl eframe::App for App {
 
         self.toasts.retain(|(_, t)| t.elapsed() < TOAST_TIME);
         self.remember_window(ctx);
-        if self
-            .cfg_changed
-            .is_some_and(|t| t.elapsed() >= SAVE_DEBOUNCE)
-            || self.playlists.iter().any(|p| p.dirty) && self.cfg_changed.is_none()
+        // Without a database playlists are never saved, so ignore their flag.
+        if self.cfg_changed.is_none()
+            && self.db.is_some()
+            && self.playlists.iter().any(|p| p.dirty)
         {
-            if self.cfg_changed.is_none() {
-                self.mark_cfg();
-            } else {
-                self.save_now();
-            }
+            self.mark_cfg();
+        }
+        if should_save(self.cfg_first_change, self.cfg_changed, now) {
+            self.save_now();
         }
 
         if playing || !self.spectrum.is_idle() {
@@ -979,6 +1004,17 @@ impl eframe::App for App {
     }
 }
 
+/// Debounce: save once changes stop for `SAVE_DEBOUNCE`, or after
+/// `SAVE_CAP` of continuous changes.
+fn should_save(first: Option<Instant>, last: Option<Instant>, now: Instant) -> bool {
+    match (first, last) {
+        (Some(first), Some(last)) => {
+            now.duration_since(last) >= SAVE_DEBOUNCE || now.duration_since(first) >= SAVE_CAP
+        }
+        _ => false,
+    }
+}
+
 fn expand_tilde(p: &Path) -> PathBuf {
     if let Ok(rest) = p.strip_prefix("~")
         && let Some(b) = directories::BaseDirs::new()
@@ -992,4 +1028,22 @@ fn is_playlist_file(p: &Path) -> bool {
     p.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("m3u") || e.eq_ignore_ascii_case("m3u8"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debounce_waits_and_caps() {
+        let t0 = Instant::now();
+        let ms = |n| t0 + Duration::from_millis(n);
+        assert!(!should_save(None, None, ms(5000)));
+        // Waits for a quiet second after the last change.
+        assert!(!should_save(Some(t0), Some(ms(900)), ms(1500)));
+        assert!(should_save(Some(t0), Some(ms(900)), ms(1900)));
+        // Changes every 500 ms never go quiet, but the cap saves at 10 s.
+        assert!(!should_save(Some(t0), Some(ms(9500)), ms(9900)));
+        assert!(should_save(Some(t0), Some(ms(9500)), ms(10_000)));
+    }
 }
