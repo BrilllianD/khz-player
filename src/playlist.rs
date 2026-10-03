@@ -423,12 +423,13 @@ impl Playlist {
     }
 
     /// Explicitly jumps to `index` (double click, Enter, jump dialog).
+    /// Like `next`/`prev`, this does not mark the list dirty: the current
+    /// track is saved through the config, not the playlist table.
     pub fn set_current(&mut self, index: usize) {
         if index < self.tracks.len() {
             self.current = Some(index);
             self.resume_at = None;
             self.sync_shuffle_pos();
-            self.dirty = true;
         }
     }
 }
@@ -614,6 +615,16 @@ mod tests {
         p.anchor = Some(1);
         p.randomize();
         assert_eq!(p.anchor, None);
+    }
+
+    #[test]
+    fn set_current_does_not_dirty() {
+        let mut p = pl(3);
+        p.dirty = false;
+        p.set_current(1);
+        p.next(Repeat::Off, false, false);
+        p.prev(Repeat::Off, false);
+        assert!(!p.dirty);
     }
 
     #[test]
