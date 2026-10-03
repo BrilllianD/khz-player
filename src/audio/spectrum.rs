@@ -10,6 +10,9 @@ const N: usize = 2048;
 const F_MIN: f32 = 50.0;
 const F_MAX: f32 = 16000.0;
 const DB_FLOOR: f32 = -60.0;
+/// Music falls off ~3-5 dB per octave, which pins the bass bars and leaves the
+/// treble low. Tilt by this much per octave around 1 kHz (pink noise reads flat).
+const TILT_DB_PER_OCT: f32 = 3.0;
 /// Fall speeds in units per second (bars are 0..1).
 const BAR_FALL: f32 = 2.4;
 const PEAK_FALL: f32 = 0.6;
@@ -29,6 +32,12 @@ pub struct Spectrum {
     pub peaks: [f32; BARS],
     hold: [f32; BARS],
     fresh: bool,
+}
+
+/// Level correction for bar `k`, taken at the band's geometric center.
+fn tilt_db(k: usize) -> f32 {
+    let center = F_MIN * (F_MAX / F_MIN).powf((k as f32 + 0.5) / BARS as f32);
+    TILT_DB_PER_OCT * (center / 1000.0).log2()
 }
 
 impl Spectrum {
@@ -112,7 +121,7 @@ impl Spectrum {
                         .map(|c| c.norm())
                         .fold(0.0f32, f32::max)
                         * norm;
-                    let db = 20.0 * mag.max(1e-9).log10();
+                    let db = 20.0 * mag.max(1e-9).log10() + tilt_db(k);
                     *t = ((db - DB_FLOOR) / -DB_FLOOR).clamp(0.0, 1.0);
                 }
             }
@@ -146,17 +155,22 @@ impl Spectrum {
 mod tests {
     use super::*;
 
-    #[test]
-    fn sine_lights_the_right_band() {
+    fn with_sine(freq: f32, amp: f32) -> Spectrum {
         let rate = 48000;
         let mut s = Spectrum::new(rate);
         let (mut tx, mut rx) = rtrb::RingBuffer::new(4096);
         for i in 0..N {
-            let v = (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / rate as f32).sin() * 0.5;
+            let v = (2.0 * std::f32::consts::PI * freq * i as f32 / rate as f32).sin() * amp;
             tx.push(v).unwrap();
         }
         s.feed(&mut rx);
         s.update(0.033, true);
+        s
+    }
+
+    #[test]
+    fn sine_lights_the_right_band() {
+        let s = with_sine(1000.0, 0.5);
         let loudest = (0..BARS)
             .max_by(|&a, &b| s.bars[a].total_cmp(&s.bars[b]))
             .unwrap();
@@ -164,6 +178,14 @@ mod tests {
         let expected = ((1000.0f32 / F_MIN).ln() / (F_MAX / F_MIN).ln() * BARS as f32) as usize;
         assert!(loudest.abs_diff(expected) <= 1, "{loudest} vs {expected}");
         assert!(s.bars[loudest] > 0.8);
+    }
+
+    #[test]
+    fn loud_bass_does_not_pin() {
+        // -6 dBFS at 60 Hz is ordinary for a modern master's kick.
+        let s = with_sine(60.0, 0.5);
+        let top = s.bars.iter().copied().fold(0.0f32, f32::max);
+        assert!(top > 0.5 && top < 0.8, "{top}");
     }
 
     #[test]

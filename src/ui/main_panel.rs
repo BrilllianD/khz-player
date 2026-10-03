@@ -140,8 +140,14 @@ pub fn show(app: &mut App, ui: &mut Ui) {
 
     // --- volume / balance / panel toggles ----------------------------------
     let row_y = top + 84.0;
+    // Bars shrink when the window is narrower than MAIN_W (tiled), so BAL
+    // never runs under the panel toggles on the right.
+    let toggles_x = x1 - 140.0;
+    let s = ((toggles_x - 8.0 - x0 - 66.0) / 260.0).clamp(0.3, 1.0);
+    let (vol_w, bal_w) = (170.0 * s, 90.0 * s);
+    let bal_x = x0 + 28.0 + vol_w + 10.0;
     widgets::small_label(ui, pos2(x0, row_y + 8.0), Align2::LEFT_CENTER, "VOL", theme.text_dim);
-    let vol_r = Rect::from_min_size(pos2(x0 + 28.0, row_y), vec2(170.0, 16.0));
+    let vol_r = Rect::from_min_size(pos2(x0 + 28.0, row_y), vec2(vol_w, 16.0));
     let (vresp, v) = widgets::bar(ui, vol_r, app.cfg.volume, false, &theme);
     if let Some(v) = v {
         app.set_volume(v);
@@ -152,8 +158,8 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     }
     vresp.on_hover_text(format!("Volume {:.0}%", app.cfg.volume * 100.0));
 
-    widgets::small_label(ui, pos2(x0 + 208.0, row_y + 8.0), Align2::LEFT_CENTER, "BAL", theme.text_dim);
-    let bal_r = Rect::from_min_size(pos2(x0 + 236.0, row_y), vec2(90.0, 16.0));
+    widgets::small_label(ui, pos2(bal_x, row_y + 8.0), Align2::LEFT_CENTER, "BAL", theme.text_dim);
+    let bal_r = Rect::from_min_size(pos2(bal_x + 28.0, row_y), vec2(bal_w, 16.0));
     let (bresp, b) = widgets::bar(ui, bal_r, (app.cfg.balance + 1.0) / 2.0, true, &theme);
     if let Some(b) = b {
         app.set_balance(b * 2.0 - 1.0);
@@ -168,7 +174,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     };
     bresp.on_hover_text(bal_text);
 
-    let toggles = Rect::from_min_max(pos2(x1 - 140.0, row_y - 1.0), pos2(x1, row_y + 17.0));
+    let toggles = Rect::from_min_max(pos2(toggles_x, row_y - 1.0), pos2(x1, row_y + 17.0));
     let mut toggle_actions = Vec::new();
     ui.scope_builder(egui::UiBuilder::new().max_rect(toggles).layout(egui::Layout::right_to_left(egui::Align::Center)), |ui| {
         ui.spacing_mut().item_spacing.x = 3.0;

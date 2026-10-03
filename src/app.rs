@@ -892,7 +892,12 @@ impl App {
 
     fn remember_window(&mut self, ctx: &egui::Context) {
         let h = ctx.content_rect().height().round();
-        if self.cfg.show_playlist && self.cfg.window.h != Some(h) && h > ui::MAIN_H {
+        // Tiled or squeezed heights would reopen a floating window with no room
+        // for the playlist; window_size() clamps too, this keeps config sane.
+        if self.cfg.show_playlist
+            && self.cfg.window.h != Some(h)
+            && h >= ui::MAIN_H + ui::PLAYLIST_MIN_H
+        {
             self.cfg.window.h = Some(h);
             self.mark_cfg();
         }

@@ -3,6 +3,7 @@
 use egui::{Align2, FontId, Rect, RichText, Sense, Ui, pos2, vec2};
 
 use crate::app::{App, Prompt, PromptKind};
+use crate::audio::PlayerState;
 use crate::library::format_duration;
 
 const ROW_H: f32 = 17.0;
@@ -37,7 +38,7 @@ fn tabs(app: &mut App, ui: &mut Ui) {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 for (i, p) in app.playlists.iter().enumerate() {
-                    let playing = i == app.playing_list && app.now.is_some();
+                    let playing = i == app.playing_list && app.state != PlayerState::Stopped;
                     let text = if playing {
                         RichText::new(format!("▸ {}", p.name))
                     } else {
