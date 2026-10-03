@@ -574,14 +574,9 @@ impl App {
     }
 
     pub fn remove_selected(&mut self) {
-        let pl = &mut self.playlists[self.active];
-        let removing_current = self.active == self.playing_list
-            && pl.current.is_some_and(|c| pl.selected.contains(&c));
-        pl.remove_selected();
-        if removing_current {
-            // Keep playing; only the playlist pointer is gone.
-            self.audio.send(Command::PrefetchNext(None));
-        }
+        // Removing the playing row keeps it playing; the playlist then continues
+        // from the row that followed it, which after_playlist_edit prefetches.
+        self.playlists[self.active].remove_selected();
         self.after_playlist_edit();
     }
 

@@ -44,6 +44,9 @@ pub struct Playlist {
     pub anchor: Option<usize>,
     /// Set on any change that should be persisted.
     pub dirty: bool,
+    /// Where playback continues after the playing row was removed: the index
+    /// of the row that followed it (`len` when it was last).
+    resume_at: Option<usize>,
     shuffle_order: Vec<usize>,
     shuffle_pos: usize,
 }
@@ -81,22 +84,31 @@ impl Playlist {
     pub fn clear(&mut self) {
         self.tracks.clear();
         self.current = None;
+        self.resume_at = None;
         self.selected.clear();
         self.anchor = None;
         self.invalidate_shuffle();
         self.dirty = true;
     }
 
-    /// Removes the given indices, keeping `current` pointing at the same track
-    /// (or `None` if it was removed).
+    /// Removes the given indices, keeping `current` pointing at the same track.
+    /// If the current track is removed, `current` becomes `None` and the next
+    /// track is the one that followed it.
     pub fn remove(&mut self, indices: &BTreeSet<usize>) {
         if indices.is_empty() {
             return;
         }
         let mut new_current = None;
+        let mut resume_at = None;
         let mut kept = Vec::with_capacity(self.tracks.len());
         for (i, t) in std::mem::take(&mut self.tracks).into_iter().enumerate() {
+            if self.resume_at == Some(i) {
+                resume_at = Some(kept.len());
+            }
             if indices.contains(&i) {
+                if self.current == Some(i) {
+                    resume_at = Some(kept.len());
+                }
                 continue;
             }
             if self.current == Some(i) {
@@ -104,8 +116,13 @@ impl Playlist {
             }
             kept.push(t);
         }
+        if self.resume_at.is_some() && resume_at.is_none() {
+            // It pointed past the end.
+            resume_at = Some(kept.len());
+        }
         self.tracks = kept;
         self.current = new_current;
+        self.resume_at = resume_at;
         self.selected.clear();
         self.anchor = None;
         self.invalidate_shuffle();
@@ -185,7 +202,9 @@ impl Playlist {
         let cur_path = self.current_track().map(|t| t.path.clone());
         self.tracks.sort_by(|a, b| cmp(a, b));
         self.current = cur_path.and_then(|p| self.tracks.iter().position(|t| t.path == p));
+        self.resume_at = None;
         self.selected.clear();
+        self.anchor = None;
         self.invalidate_shuffle();
         self.dirty = true;
     }
@@ -216,6 +235,7 @@ impl Playlist {
             .map(|&i| old[i].take().expect("index used once"))
             .collect();
         self.current = self.current.map(|c| new_pos[c]);
+        self.resume_at = None;
         self.anchor = self.anchor.map(|a| new_pos[a]);
         self.selected = self.selected.iter().map(|&i| new_pos[i]).collect();
         self.invalidate_shuffle();
@@ -227,7 +247,9 @@ impl Playlist {
         self.tracks.reverse();
         let n = self.tracks.len();
         self.current = self.current.map(|c| n - 1 - c);
+        self.resume_at = None;
         self.selected.clear();
+        self.anchor = None;
         self.invalidate_shuffle();
         self.dirty = true;
     }
@@ -236,7 +258,9 @@ impl Playlist {
         let cur_path = self.current_track().map(|t| t.path.clone());
         self.tracks.shuffle(&mut rand::rng());
         self.current = cur_path.and_then(|p| self.tracks.iter().position(|t| t.path == p));
+        self.resume_at = None;
         self.selected.clear();
+        self.anchor = None;
         self.invalidate_shuffle();
         self.dirty = true;
     }
@@ -296,7 +320,7 @@ impl Playlist {
             return None;
         }
         if auto && repeat == Repeat::One {
-            return self.current.or(Some(0));
+            return self.current.or(self.resume_row()).or(Some(0));
         }
         if shuffle {
             self.ensure_shuffle();
@@ -311,13 +335,26 @@ impl Playlist {
                 None => None,
             }
         } else {
-            match self.current {
-                None => Some(0),
-                Some(c) if c + 1 < self.tracks.len() => Some(c + 1),
-                Some(_) if repeat == Repeat::All || (repeat == Repeat::One && !auto) => Some(0),
-                Some(_) => None,
+            // The row after the current one, or the row that followed a
+            // removed current one.
+            let after = match (self.current, self.resume_at) {
+                (Some(c), _) => c + 1,
+                (None, Some(r)) => r,
+                (None, None) => 0,
+            };
+            if after < self.tracks.len() {
+                Some(after)
+            } else if repeat == Repeat::All || (repeat == Repeat::One && !auto) {
+                Some(0)
+            } else {
+                None
             }
         }
+    }
+
+    /// The row that followed a removed current track, if it still exists.
+    fn resume_row(&self) -> Option<usize> {
+        self.resume_at.filter(|&r| r < self.tracks.len())
     }
 
     /// Advances to the next track and returns its index.
@@ -326,13 +363,15 @@ impl Playlist {
             return None;
         }
         if auto && repeat == Repeat::One {
-            self.current = self.current.or(Some(0));
+            self.current = self.current.or(self.resume_row()).or(Some(0));
+            self.resume_at = None;
             return self.current;
         }
         if shuffle {
             self.ensure_shuffle();
             self.sync_shuffle_pos();
             if self.current.is_none() {
+                self.resume_at = None;
                 self.shuffle_pos = 0;
             } else if self.shuffle_pos + 1 < self.shuffle_order.len() {
                 self.shuffle_pos += 1;
@@ -353,6 +392,7 @@ impl Playlist {
         } else {
             let n = self.peek_next(repeat, false, auto)?;
             self.current = Some(n);
+            self.resume_at = None;
             Some(n)
         }
     }
@@ -368,15 +408,17 @@ impl Playlist {
                 self.shuffle_pos -= 1;
             }
             self.current = Some(self.shuffle_order[self.shuffle_pos]);
+            self.resume_at = None;
             return self.current;
         }
-        let n = match self.current {
-            None => 0,
-            Some(0) if repeat != Repeat::Off => self.tracks.len() - 1,
-            Some(0) => 0,
-            Some(c) => c - 1,
+        // A removed current track sat just before `resume_at`.
+        let n = match (self.current, self.resume_at) {
+            (Some(c), _) | (None, Some(c)) if c > 0 => c - 1,
+            (Some(_), _) | (None, Some(_)) if repeat != Repeat::Off => self.tracks.len() - 1,
+            _ => 0,
         };
         self.current = Some(n);
+        self.resume_at = None;
         Some(n)
     }
 
@@ -384,6 +426,7 @@ impl Playlist {
     pub fn set_current(&mut self, index: usize) {
         if index < self.tracks.len() {
             self.current = Some(index);
+            self.resume_at = None;
             self.sync_shuffle_pos();
             self.dirty = true;
         }
@@ -469,6 +512,108 @@ mod tests {
         assert_eq!(p.current_track().unwrap().path, PathBuf::from("/m/3.mp3"));
         p.remove(&[1].into_iter().collect());
         assert_eq!(p.current, None);
+    }
+
+    fn path_of(p: &Playlist) -> String {
+        p.current_track().unwrap().path.display().to_string()
+    }
+
+    #[test]
+    fn next_after_current_removed() {
+        let mut p = pl(5);
+        p.set_current(2);
+        p.remove(&[2].into());
+        assert_eq!(p.current, None);
+        assert_eq!(p.peek_next(Repeat::Off, false, true), Some(2));
+        assert_eq!(p.next(Repeat::Off, false, true), Some(2));
+        assert_eq!(path_of(&p), "/m/3.mp3");
+        assert_eq!(p.next(Repeat::Off, false, true), Some(3));
+    }
+
+    #[test]
+    fn next_after_last_removed_repeat_modes() {
+        let mut p = pl(3);
+        p.set_current(2);
+        p.remove(&[2].into());
+        assert_eq!(p.peek_next(Repeat::Off, false, true), None);
+        assert_eq!(p.next(Repeat::Off, false, true), None);
+        assert_eq!(p.peek_next(Repeat::All, false, true), Some(0));
+        assert_eq!(p.next(Repeat::All, false, true), Some(0));
+    }
+
+    #[test]
+    fn resume_survives_more_removals_and_appends() {
+        let mut p = pl(6);
+        p.set_current(3);
+        p.remove(&[3].into());
+        // Removing rows before and at the resume point shifts it.
+        p.remove(&[0, 3].into());
+        assert_eq!(p.next(Repeat::Off, false, true), Some(2));
+        assert_eq!(path_of(&p), "/m/5.mp3");
+
+        let mut p = pl(2);
+        p.set_current(1);
+        p.remove(&[1].into());
+        p.add([Track::from_path(PathBuf::from("/m/new.mp3"))]);
+        assert_eq!(p.next(Repeat::Off, false, true), Some(1));
+        assert_eq!(path_of(&p), "/m/new.mp3");
+    }
+
+    #[test]
+    fn prev_after_current_removed() {
+        let mut p = pl(5);
+        p.set_current(2);
+        p.remove(&[2].into());
+        assert_eq!(p.prev(Repeat::Off, false), Some(1));
+        assert_eq!(path_of(&p), "/m/1.mp3");
+
+        let mut p = pl(3);
+        p.set_current(0);
+        p.remove(&[0].into());
+        assert_eq!(p.prev(Repeat::All, false), Some(1));
+    }
+
+    #[test]
+    fn peek_matches_next_linear() {
+        for repeat in [Repeat::Off, Repeat::All, Repeat::One] {
+            for auto in [true, false] {
+                for start in 0..4 {
+                    let mut p = pl(4);
+                    p.set_current(start);
+                    for _ in 0..6 {
+                        let peek = p.peek_next(repeat, false, auto);
+                        assert_eq!(p.next(repeat, false, auto), peek, "{repeat:?} {auto} {start}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn remove_current_shuffle_continues() {
+        let mut p = pl(5);
+        p.set_current(2);
+        p.next(Repeat::Off, true, true);
+        let cur = p.current.unwrap();
+        p.remove(&[cur].into());
+        let peek = p.peek_next(Repeat::Off, true, true);
+        let next = p.next(Repeat::Off, true, true);
+        assert_eq!(next, peek);
+        assert!(next.is_some_and(|i| i < 4));
+    }
+
+    #[test]
+    fn reorder_clears_anchor() {
+        let mut p = pl(4);
+        p.anchor = Some(1);
+        p.reverse();
+        assert_eq!(p.anchor, None);
+        p.anchor = Some(1);
+        p.sort_by(|a, b| a.path.cmp(&b.path));
+        assert_eq!(p.anchor, None);
+        p.anchor = Some(1);
+        p.randomize();
+        assert_eq!(p.anchor, None);
     }
 
     #[test]
