@@ -153,9 +153,11 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     if let Some(v) = v {
         app.set_volume(v);
     }
-    let scroll = if vresp.hovered() { ui.input(|i| i.smooth_scroll_delta.y) } else { 0.0 };
-    if scroll != 0.0 {
-        app.set_volume(app.cfg.volume + scroll.signum() * 0.02);
+    // 2 % per wheel notch. Read the raw events: the smoothed scroll delta
+    // spreads one notch over several frames.
+    let notches = if vresp.hovered() { ui.input(wheel_notches) } else { 0.0 };
+    if notches != 0.0 {
+        app.set_volume(app.cfg.volume + notches * 0.02);
     }
     vresp.on_hover_text(format!("Volume {:.0}%", app.cfg.volume * 100.0));
 
@@ -318,4 +320,20 @@ fn marquee_text(app: &App) -> String {
         .map(|d| format!(" ({})", format_duration(d)))
         .unwrap_or_default();
     format!("{idx}{}{dur}", t.display_name())
+}
+
+/// Vertical wheel movement this frame in notches; touchpad pixels count
+/// 50 to a notch.
+fn wheel_notches(i: &egui::InputState) -> f32 {
+    i.events
+        .iter()
+        .map(|e| match e {
+            egui::Event::MouseWheel { unit, delta, .. } => match unit {
+                egui::MouseWheelUnit::Line => delta.y,
+                egui::MouseWheelUnit::Point => delta.y / 50.0,
+                egui::MouseWheelUnit::Page => delta.y * 10.0,
+            },
+            _ => 0.0,
+        })
+        .sum()
 }
