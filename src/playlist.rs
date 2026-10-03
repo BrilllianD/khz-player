@@ -149,6 +149,34 @@ impl Playlist {
         self.remove(&dups);
     }
 
+    /// Removes later copies of the same song in other files: same artist and
+    /// title (case-insensitive) and durations within 2 s. Tracks without both
+    /// tags are kept.
+    pub fn remove_duplicate_songs(&mut self) {
+        let mut kept: Vec<(String, String, Option<u64>)> = Vec::new();
+        let mut dups = BTreeSet::new();
+        for (i, t) in self.tracks.iter().enumerate() {
+            let (Some(artist), Some(title)) = (&t.artist, &t.title) else {
+                continue;
+            };
+            let key = (artist.trim().to_lowercase(), title.trim().to_lowercase());
+            let same = kept.iter().any(|(a, ti, d)| {
+                *a == key.0
+                    && *ti == key.1
+                    && match (d, t.duration_ms) {
+                        (Some(a), Some(b)) => a.abs_diff(b) <= 2000,
+                        _ => true,
+                    }
+            });
+            if same {
+                dups.insert(i);
+            } else {
+                kept.push((key.0, key.1, t.duration_ms));
+            }
+        }
+        self.remove(&dups);
+    }
+
     /// Reorders tracks with `cmp`, keeping `current` on the same track.
     pub fn sort_by<F>(&mut self, mut cmp: F)
     where
@@ -494,5 +522,29 @@ mod tests {
         p.selected.clear();
         assert!(!p.move_selected(0));
         assert!(!p.dirty);
+    }
+
+    #[test]
+    fn duplicate_songs_by_tags() {
+        let song = |path: &str, artist: Option<&str>, title: &str, ms: u64| {
+            let mut t = Track::from_path(PathBuf::from(path));
+            t.artist = artist.map(Into::into);
+            t.title = Some(title.into());
+            t.duration_ms = Some(ms);
+            t
+        };
+        let mut p = Playlist::new("t");
+        p.add([
+            song("/a.mp3", Some("Ария"), "Беспечный ангел", 200_000),
+            song("/b.mp3", Some("ария "), "беспечный ангел", 201_500),
+            song("/c.mp3", Some("Ария"), "Беспечный ангел", 400_000),
+            song("/d.mp3", None, "Беспечный ангел", 200_000),
+            song("/e.mp3", Some("Kino"), "Gruppa krovi", 280_000),
+        ]);
+        p.current = Some(4);
+        p.remove_duplicate_songs();
+        let paths: Vec<_> = p.tracks.iter().map(|t| t.path.to_str().unwrap()).collect();
+        assert_eq!(paths, ["/a.mp3", "/c.mp3", "/d.mp3", "/e.mp3"]);
+        assert_eq!(p.current, Some(3));
     }
 }

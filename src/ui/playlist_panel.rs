@@ -313,6 +313,14 @@ fn footer(app: &mut App, ui: &mut Ui) {
                 edited = true;
                 ui.close();
             }
+            if ui.button("Remove duplicate songs (tags)")
+                .on_hover_text("Same artist and title, length within 2 s; keeps the first")
+                .clicked()
+            {
+                pl.remove_duplicate_songs();
+                edited = true;
+                ui.close();
+            }
             ui.separator();
             if ui.button("Clear playlist").clicked() {
                 pl.clear();
