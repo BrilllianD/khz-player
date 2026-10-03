@@ -49,6 +49,8 @@ pub struct Config {
     pub repeat: Repeat,
     pub last_playlist: Option<String>,
     pub last_track_index: Option<usize>,
+    /// Position in the last track when rmp quit while playing or paused.
+    pub last_position_ms: Option<u64>,
     pub show_eq: bool,
     pub show_playlist: bool,
     pub show_library: bool,
@@ -72,6 +74,7 @@ impl Default for Config {
             repeat: Repeat::Off,
             last_playlist: None,
             last_track_index: None,
+            last_position_ms: None,
             show_eq: true,
             show_playlist: true,
             show_library: false,

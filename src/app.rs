@@ -214,9 +214,13 @@ impl App {
                 app.play_index(app.active, before);
             }
         } else if let Some(t) = app.playlists[active].current_track() {
-            // Restore the last track without starting playback.
+            // Restore the last track without starting playback; paused at the
+            // old position if rmp quit mid-track.
             let path = t.path.clone();
-            app.audio.send(Command::Load { path, play: false });
+            app.audio.send(match app.cfg.last_position_ms {
+                Some(ms) => Command::Resume { path, at: Duration::from_millis(ms) },
+                None => Command::Load { path, play: false },
+            });
         }
         if app.library.is_empty() {
             app.rescan();
@@ -882,8 +886,12 @@ impl App {
                 }
             }
         }
-        self.cfg.last_playlist = self.playlists.get(self.active).map(|p| p.name.clone());
-        self.cfg.last_track_index = self.playlists.get(self.active).and_then(|p| p.current);
+        // Remember the list that is playing, so the next start resumes it.
+        let list = if self.now.is_some() { self.playing_list } else { self.active };
+        self.cfg.last_playlist = self.playlists.get(list).map(|p| p.name.clone());
+        self.cfg.last_track_index = self.playlists.get(list).and_then(|p| p.current);
+        self.cfg.last_position_ms = (self.now.is_some() && self.state != PlayerState::Stopped)
+            .then(|| self.audio.position().as_millis() as u64);
         if let Err(e) = self.cfg.save() {
             tracing::warn!("save config: {e}");
         }

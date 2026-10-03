@@ -26,6 +26,8 @@ pub enum PlayerState {
 #[derive(Debug, Clone)]
 pub enum Command {
     Load { path: PathBuf, play: bool },
+    /// Loads `path` paused at `at`; restores the previous session.
+    Resume { path: PathBuf, at: Duration },
     Play,
     Pause,
     Stop,

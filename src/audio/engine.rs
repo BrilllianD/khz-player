@@ -135,6 +135,15 @@ impl Engine {
     fn handle(&mut self, cmd: Command) -> bool {
         match cmd {
             Command::Load { path, play } => self.load(path, play),
+            Command::Resume { path, at } => {
+                self.load(path, false);
+                if self.cur.is_some() {
+                    if !at.is_zero() {
+                        self.seek(at);
+                    }
+                    self.set_state(PlayerState::Paused);
+                }
+            }
             Command::Play => match self.state {
                 PlayerState::Paused => self.set_state(PlayerState::Playing),
                 PlayerState::Stopped => {
@@ -414,6 +423,45 @@ mod tests {
                 Err(_) => panic!("timed out waiting for event"),
             }
         }
+    }
+
+    #[test]
+    fn resume_loads_paused_at_position() {
+        let dir = std::env::temp_dir().join(format!("rmp-resume-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.wav");
+        crate::library::scanner::tests::write_wav(&path, 8000 * 4);
+
+        let shared = Arc::new(Shared::new(1.0, 0.0));
+        let (ring_tx, ring_rx) = rtrb::RingBuffer::new(48000 * 2 * 3 / 10);
+        let stop = Arc::new(AtomicBool::new(false));
+        let cb = {
+            let (s, st) = (shared.clone(), stop.clone());
+            std::thread::spawn(move || fake_callback(s, ring_rx, st))
+        };
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let (ev_tx, ev_rx) = crossbeam_channel::unbounded();
+        let eng = {
+            let s = shared.clone();
+            std::thread::spawn(move || run(rx, ev_tx, s, ring_tx, egui::Context::default()))
+        };
+        let pos = || Duration::from_secs_f64(shared.position_frames() as f64 / 48000.0);
+
+        tx.send(Command::Resume { path, at: Duration::from_millis(2500) }).unwrap();
+        wait_for(&ev_rx, |e| matches!(e, Event::StateChanged(PlayerState::Paused)), 5);
+        std::thread::sleep(Duration::from_millis(100));
+        assert!((pos().as_secs_f64() - 2.5).abs() < 0.05, "{:?}", pos());
+
+        tx.send(Command::Play).unwrap();
+        wait_for(&ev_rx, |e| matches!(e, Event::StateChanged(PlayerState::Playing)), 5);
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(pos() > Duration::from_millis(2500), "{:?}", pos());
+
+        tx.send(Command::Shutdown).unwrap();
+        eng.join().unwrap();
+        stop.store(true, Ordering::Relaxed);
+        cb.join().unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// Needs a real file: `RMP_TEST_FILE=/path/song.mp3 cargo test engine_real -- --ignored`.

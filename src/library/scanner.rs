@@ -93,10 +93,11 @@ fn scan(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn write_wav(path: &std::path::Path, frames: u32) {
+    /// Silent 8 kHz mono 16-bit WAV.
+    pub(crate) fn write_wav(path: &std::path::Path, frames: u32) {
         let data_len = frames * 2;
         let mut b = Vec::new();
         b.extend_from_slice(b"RIFF");
