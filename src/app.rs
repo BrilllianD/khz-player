@@ -639,6 +639,10 @@ impl App {
                 Event::Loaded(info) => self.on_track_started(info, false),
                 Event::Advanced(info) => self.on_track_started(info, true),
                 Event::StateChanged(s) => {
+                    if s == PlayerState::Playing && self.state != s {
+                        // The marquee holds still when not playing; restart its scroll.
+                        self.marquee_start = Instant::now();
+                    }
                     self.state = s;
                     self.mpris.send(MprisUpdate::Status(s));
                 }
