@@ -11,7 +11,7 @@ fn main() -> eframe::Result {
         .init();
 
     let args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
-    let cfg = config::Config::load();
+    let (cfg, cfg_error) = config::Config::load();
     let size = app::window_size(&cfg);
 
     let options = eframe::NativeOptions {
@@ -36,6 +36,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "rmp",
         options,
-        Box::new(move |cc| Ok(Box::new(app::App::new(cc, cfg, args)))),
+        Box::new(move |cc| Ok(Box::new(app::App::new(cc, cfg, args, cfg_error)))),
     )
 }

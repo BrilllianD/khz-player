@@ -1,8 +1,8 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{BANDS, config_dir};
+use crate::config::{BANDS, config_dir, set_aside, write_atomic};
 
 pub const MAX_DB: f32 = 12.0;
 
@@ -75,24 +75,27 @@ pub fn render_user(presets: &[Preset]) -> anyhow::Result<String> {
     })?)
 }
 
-pub fn load_user() -> Vec<Preset> {
-    let path = user_presets_path();
-    match std::fs::read_to_string(&path) {
-        Ok(s) => parse_user(&s).unwrap_or_else(|e| {
-            tracing::warn!("bad presets file {}: {e}", path.display());
-            Vec::new()
-        }),
-        Err(_) => Vec::new(),
+/// Loads user presets; an unparsable file is moved aside and reported.
+pub fn load_user() -> (Vec<Preset>, Option<String>) {
+    load_user_from(&user_presets_path())
+}
+
+pub fn load_user_from(path: &Path) -> (Vec<Preset>, Option<String>) {
+    match std::fs::read_to_string(path) {
+        Ok(s) => match parse_user(&s) {
+            Ok(p) => (p, None),
+            Err(e) => (Vec::new(), Some(set_aside(path, &e))),
+        },
+        Err(_) => (Vec::new(), None),
     }
 }
 
 pub fn save_user(presets: &[Preset]) -> anyhow::Result<()> {
-    let path = user_presets_path();
-    if let Some(d) = path.parent() {
-        std::fs::create_dir_all(d)?;
-    }
-    std::fs::write(path, render_user(presets)?)?;
-    Ok(())
+    save_user_to(&user_presets_path(), presets)
+}
+
+pub fn save_user_to(path: &Path, presets: &[Preset]) -> anyhow::Result<()> {
+    write_atomic(path, &render_user(presets)?)
 }
 
 #[cfg(test)]
@@ -123,5 +126,21 @@ mod tests {
             parse_user("[[preset]]\nname = \"x\"\nbands = [30,0,0,0,0,0,0,0,0,-30]\n").unwrap();
         assert_eq!(clamped[0].bands[0], 12.0);
         assert_eq!(clamped[0].bands[9], -12.0);
+    }
+
+    #[test]
+    fn bad_file_renamed_and_save_is_atomic() {
+        let dir = crate::config::test_dir("presets-bad");
+        let path = dir.join("eq_presets.toml");
+        std::fs::write(&path, "[[preset]]\nname = 1\n").unwrap();
+        let (presets, err) = load_user_from(&path);
+        assert!(presets.is_empty());
+        assert!(err.is_some());
+        assert!(dir.join("eq_presets.toml.broken").exists());
+
+        let p = Preset { name: "Mine".into(), preamp: 0.0, bands: [1.0; BANDS] };
+        save_user_to(&path, std::slice::from_ref(&p)).unwrap();
+        assert!(!dir.join("eq_presets.toml.tmp").exists());
+        assert_eq!(load_user_from(&path), (vec![p], None));
     }
 }

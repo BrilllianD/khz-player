@@ -111,7 +111,12 @@ pub fn window_size(cfg: &Config) -> egui::Vec2 {
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, cfg: Config, args: Vec<PathBuf>) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        cfg: Config,
+        args: Vec<PathBuf>,
+        cfg_error: Option<String>,
+    ) -> Self {
         let ctx = cc.egui_ctx.clone();
         let nerd_font = fonts::install(&ctx, cfg.font_path.as_deref());
         let theme = Theme::load();
@@ -159,11 +164,12 @@ impl App {
         }
 
         let mpris = mpris::start(ctx.clone());
+        let (user_presets, presets_error) = eq_presets::load_user();
 
         let mut app = Self {
             ctx,
             builtin_presets: eq_presets::builtin(),
-            user_presets: eq_presets::load_user(),
+            user_presets,
             cfg,
             cfg_changed: None,
             theme,
@@ -201,6 +207,9 @@ impl App {
         app.mpris.send(MprisUpdate::Volume(app.cfg.volume as f64));
         app.mpris.send(MprisUpdate::Shuffle(app.cfg.shuffle));
         app.mpris.send(MprisUpdate::Repeat(app.cfg.repeat));
+        for e in cfg_error.into_iter().chain(presets_error) {
+            app.toast(e);
+        }
         if let Some(e) = app.audio.init_error.clone() {
             app.toast(format!("Audio output unavailable: {e}"));
         }
