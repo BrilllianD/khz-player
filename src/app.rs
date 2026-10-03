@@ -813,7 +813,12 @@ impl App {
                         self.play();
                     }
                 }
-                MprisAction::Play => self.play(),
+                // Unlike the X key, MPRIS Play must not restart a playing track.
+                MprisAction::Play => {
+                    if self.state != PlayerState::Playing {
+                        self.play();
+                    }
+                }
                 MprisAction::Pause => self.audio.send(Command::Pause),
                 MprisAction::Stop => self.audio.send(Command::Stop),
                 MprisAction::Next => self.next(),
@@ -873,7 +878,11 @@ impl App {
         match a {
             Action::Prev => self.prev(),
             Action::Play => self.play(),
-            Action::Pause => self.audio.send(Command::Pause),
+            Action::PauseToggle => match self.state {
+                PlayerState::Playing => self.audio.send(Command::Pause),
+                PlayerState::Paused => self.audio.send(Command::Play),
+                PlayerState::Stopped => {}
+            },
             Action::Stop => self.audio.send(Command::Stop),
             Action::Next => self.next(),
             Action::TogglePlay => {

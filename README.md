@@ -41,7 +41,7 @@ there.
 
 | Key | Action |
 | --- | --- |
-| `Z` `X` `C` `V` `B` | Previous, play, pause, stop, next |
+| `Z` `X` `C` `V` `B` | Previous, play (restarts when playing), pause / resume, stop, next |
 | `Space` | Play / pause |
 | `←` `→` | Seek 5 s back / forward |
 | `↑` `↓`, `+` `-` | Volume up / down |

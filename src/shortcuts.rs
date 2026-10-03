@@ -6,7 +6,8 @@ use egui::{Key, Modifiers};
 pub enum Action {
     Prev,
     Play,
-    Pause,
+    /// Winamp's C: pause, or resume when paused.
+    PauseToggle,
     Stop,
     Next,
     TogglePlay,
@@ -27,7 +28,7 @@ pub enum Action {
 const BINDINGS: &[(Modifiers, Key, Action)] = &[
     (Modifiers::NONE, Key::Z, Action::Prev),
     (Modifiers::NONE, Key::X, Action::Play),
-    (Modifiers::NONE, Key::C, Action::Pause),
+    (Modifiers::NONE, Key::C, Action::PauseToggle),
     (Modifiers::NONE, Key::V, Action::Stop),
     (Modifiers::NONE, Key::B, Action::Next),
     (Modifiers::NONE, Key::Space, Action::TogglePlay),
@@ -59,4 +60,39 @@ pub fn collect(ctx: &egui::Context) -> Vec<Action> {
             .map(|(_, _, a)| *a)
             .collect()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn press(modifiers: Modifiers, key: Key) -> Vec<Action> {
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            events: vec![
+                egui::Event::ModifiersChanged(modifiers),
+                egui::Event::Key {
+                    key,
+                    physical_key: Some(key),
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                },
+            ],
+            ..Default::default()
+        };
+        let mut actions = Vec::new();
+        ctx.run_ui(input, |ui| actions = collect(ui.ctx()))
+            .drop_without_applying_deltas();
+        actions
+    }
+
+    #[test]
+    fn keys_map_to_actions() {
+        assert_eq!(press(Modifiers::NONE, Key::C), [Action::PauseToggle]);
+        // Alt+L must not also count as a plain L: Alt is ignored when matching,
+        // so the Alt binding has to come first and consume the key.
+        assert_eq!(press(Modifiers::ALT, Key::L), [Action::ToggleLibrary]);
+        assert_eq!(press(Modifiers::NONE, Key::L), [Action::FocusOpen]);
+    }
 }
