@@ -112,6 +112,8 @@ pub struct Equalizer {
     filters: [Biquad; BANDS],
     cur_db: [f32; BANDS],
     cur_preamp_db: f32,
+    /// Linear gain for `cur_preamp_db`, updated with it.
+    pre_gain: f64,
     counter: usize,
 }
 
@@ -122,6 +124,7 @@ impl Equalizer {
             filters: [Biquad::UNITY; BANDS],
             cur_db: [0.0; BANDS],
             cur_preamp_db: 0.0,
+            pre_gain: 1.0,
             counter: 0,
         }
     }
@@ -159,6 +162,7 @@ impl Equalizer {
         } else {
             preamp
         };
+        self.pre_gain = 10f64.powf(self.cur_preamp_db as f64 / 20.0);
     }
 
     fn is_flat(&self) -> bool {
@@ -176,7 +180,7 @@ impl Equalizer {
                 self.smooth(p);
             }
             self.counter = (self.counter + 1) % SMOOTH_BLOCK;
-            let pre = 10f64.powf(self.cur_preamp_db as f64 / 20.0);
+            let pre = self.pre_gain;
             for (ch, s) in frame.iter_mut().enumerate() {
                 let mut x = *s as f64 * pre;
                 for (i, f) in self.filters.iter_mut().enumerate() {
