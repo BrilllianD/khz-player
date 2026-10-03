@@ -35,7 +35,14 @@ pub fn file_stamp(path: &Path) -> (i64, i64) {
 
 fn clean(s: Option<std::borrow::Cow<'_, str>>) -> Option<String> {
     s.map(|v| fix_cp1251(v.trim()))
-        .filter(|v| !v.is_empty())
+        .filter(|v| !v.is_empty() && !is_lost(v))
+}
+
+/// Tags written through a lossy codepage come out as "???????"; nothing can be
+/// recovered, so treat them as missing and let the file name show instead.
+/// A lone "?" is a real title (XXXTentacion's album), so it takes two.
+fn is_lost(s: &str) -> bool {
+    s.matches('?').count() >= 2 && !s.chars().any(char::is_alphanumeric)
 }
 
 /// Old Russian rips store CP1251 bytes in tags declared as Latin-1, which decode
@@ -115,13 +122,22 @@ pub fn read(path: &Path) -> Track {
 
 #[cfg(test)]
 mod tests {
-    use super::fix_cp1251;
+    use super::{fix_cp1251, is_lost};
 
     #[test]
     fn cp1251_mojibake_is_repaired() {
         assert_eq!(fix_cp1251("Ïðèâåò"), "Привет");
         assert_eq!(fix_cp1251("Àðèÿ - Îáìàí"), "Ария - Обман");
         assert_eq!(fix_cp1251("¨æèê"), "Ёжик");
+    }
+
+    #[test]
+    fn question_mark_tags_are_lost() {
+        assert!(is_lost("???????"));
+        assert!(is_lost("??,???"));
+        assert!(!is_lost("Am I Evil?"));
+        assert!(!is_lost("!!!"));
+        assert!(!is_lost("?"));
     }
 
     #[test]
