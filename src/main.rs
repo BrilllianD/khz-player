@@ -23,6 +23,14 @@ fn main() -> eframe::Result {
             .with_decorations(false)
             .with_drag_and_drop(true),
         persist_window: false,
+        // With vsync, eglSwapBuffers waits for a Wayland frame callback, which
+        // Hyprland never sends to windows on hidden workspaces: the UI thread
+        // stalls, misses pings and gets an "Application Not Responding" dialog.
+        // Frame rate is already capped by our own repaint requests.
+        glow_options: eframe::egui_glow::GlowConfiguration {
+            vsync: false,
+            ..Default::default()
+        },
         ..Default::default()
     };
     eframe::run_native(
