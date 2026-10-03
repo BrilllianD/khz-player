@@ -8,27 +8,40 @@ use crate::theme::Theme;
 
 pub struct Album {
     pub name: String,
+    /// Header text, "Name [year]".
+    pub label: String,
     pub tracks: Vec<usize>,
 }
 
 pub struct Artist {
     pub name: String,
+    /// Header text, "Name  (count)".
+    pub label: String,
     pub albums: Vec<Album>,
     pub count: usize,
 }
 
+impl Artist {
+    pub fn tracks(&self) -> Vec<usize> {
+        self.albums.iter().flat_map(|a| a.tracks.iter().copied()).collect()
+    }
+}
+
 #[derive(Default)]
 pub struct Cache {
-    key: Option<(u64, String)>,
+    /// Library generation `order` and `hay` were built for.
+    generation: Option<u64>,
+    /// Every track index in tree order (artist, album, disc, track, path).
+    order: Vec<usize>,
+    /// Lowercased search text per track index.
+    hay: Vec<String>,
+    query: String,
     pub artists: Vec<Artist>,
     pub matches: usize,
 }
 
-fn matches(t: &Track, terms: &[String]) -> bool {
-    if terms.is_empty() {
-        return true;
-    }
-    let hay = format!(
+fn haystack(t: &Track) -> String {
+    format!(
         "{} {} {} {} {}",
         t.artist.as_deref().unwrap_or(""),
         t.album_artist.as_deref().unwrap_or(""),
@@ -36,48 +49,51 @@ fn matches(t: &Track, terms: &[String]) -> bool {
         t.display_title(),
         t.genre.as_deref().unwrap_or("")
     )
-    .to_lowercase();
-    terms.iter().all(|w| hay.contains(w.as_str()))
+    .to_lowercase()
 }
 
-/// Rebuilds the grouped view when the library or the query changes.
+/// Rebuilds the grouped view when the library or the query changes. Sorting and
+/// search text depend only on the library, so a new query just filters.
 pub fn refresh(cache: &mut Cache, library: &[Track], generation: u64, query: &str) {
-    let key = (generation, query.to_string());
-    if cache.key.as_ref() == Some(&key) {
+    let fresh_lib = cache.generation != Some(generation);
+    if !fresh_lib && cache.query == query {
         return;
     }
+    if fresh_lib {
+        let mut order: Vec<usize> = (0..library.len()).collect();
+        order.sort_by_cached_key(|&i| {
+            let t = &library[i];
+            (
+                t.group_artist().to_lowercase(),
+                t.group_album().to_lowercase(),
+                t.disc_no,
+                t.track_no,
+                &t.path,
+            )
+        });
+        cache.order = order;
+        cache.hay = library.iter().map(haystack).collect();
+        cache.generation = Some(generation);
+    }
+    cache.query = query.to_string();
     let terms: Vec<String> = query
         .to_lowercase()
         .split_whitespace()
         .map(str::to_string)
         .collect();
-    let mut idx: Vec<usize> = (0..library.len())
-        .filter(|&i| matches(&library[i], &terms))
-        .collect();
-    idx.sort_by(|&a, &b| {
-        let (ta, tb) = (&library[a], &library[b]);
-        (
-            ta.group_artist().to_lowercase(),
-            ta.group_album().to_lowercase(),
-            ta.disc_no,
-            ta.track_no,
-            &ta.path,
-        )
-            .cmp(&(
-                tb.group_artist().to_lowercase(),
-                tb.group_album().to_lowercase(),
-                tb.disc_no,
-                tb.track_no,
-                &tb.path,
-            ))
-    });
     let mut artists: Vec<Artist> = Vec::new();
-    for i in idx.iter().copied() {
+    let mut matches = 0;
+    for i in cache.order.iter().copied() {
+        if !terms.iter().all(|w| cache.hay[i].contains(w.as_str())) {
+            continue;
+        }
+        matches += 1;
         let t = &library[i];
         let (ar, al) = (t.group_artist(), t.group_album());
         if artists.last().is_none_or(|a| !a.name.eq_ignore_ascii_case(ar)) {
             artists.push(Artist {
                 name: ar.to_string(),
+                label: String::new(),
                 albums: Vec::new(),
                 count: 0,
             });
@@ -89,16 +105,20 @@ pub fn refresh(cache: &mut Cache, library: &[Track], generation: u64, query: &st
             .last()
             .is_none_or(|a| !a.name.eq_ignore_ascii_case(al))
         {
+            let year = t.year.map(|y| format!(" [{y}]")).unwrap_or_default();
             artist.albums.push(Album {
                 name: al.to_string(),
+                label: format!("{al}{year}"),
                 tracks: Vec::new(),
             });
         }
         artist.albums.last_mut().expect("album").tracks.push(i);
     }
-    cache.matches = idx.len();
+    for a in &mut artists {
+        a.label = format!("{}  ({})", a.name, a.count);
+    }
+    cache.matches = matches;
     cache.artists = artists;
-    cache.key = Some(key);
 }
 
 pub enum Act {
@@ -190,27 +210,15 @@ pub fn tree(ui: &mut Ui, cache: &Cache, lib: &[Track], searching: bool, theme: &
         .auto_shrink([false, false])
         .show(ui, |ui| {
             for artist in &cache.artists {
-                let all: Vec<usize> = artist
-                    .albums
-                    .iter()
-                    .flat_map(|a| a.tracks.iter().copied())
-                    .collect();
                 let header = CollapsingHeader::new(
-                    RichText::new(format!("{}  ({})", artist.name, artist.count))
-                        .color(theme.text_bright),
+                    RichText::new(&artist.label).color(theme.text_bright),
                 )
                 .id_salt(("artist", &artist.name))
                 .open(if searching && cache.matches <= 200 { Some(true) } else { None })
                 .show(ui, |ui| {
                     for album in &artist.albums {
-                        let year = album
-                            .tracks
-                            .first()
-                            .and_then(|&i| lib[i].year)
-                            .map(|y| format!(" [{y}]"))
-                            .unwrap_or_default();
                         let h = CollapsingHeader::new(
-                            RichText::new(format!("{}{year}", album.name)).color(theme.text),
+                            RichText::new(&album.label).color(theme.text),
                         )
                         .id_salt(("album", &artist.name, &album.name))
                         .open(if searching && cache.matches <= 60 { Some(true) } else { None })
@@ -258,15 +266,61 @@ pub fn tree(ui: &mut Ui, cache: &Cache, lib: &[Track], searching: bool, theme: &
                 });
                 header.header_response.context_menu(|ui| {
                     if ui.button("Add artist to playlist").clicked() {
-                        act = Some(Act::Add(all.clone()));
+                        act = Some(Act::Add(artist.tracks()));
                         ui.close();
                     }
                     if ui.button("Play artist (replace playlist)").clicked() {
-                        act = Some(Act::Replace(all.clone()));
+                        act = Some(Act::Replace(artist.tracks()));
                         ui.close();
                     }
                 });
             }
         });
     act
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn track(artist: &str, album: &str, no: u32, title: &str) -> Track {
+        Track {
+            path: format!("/m/{artist}/{album}/{no}.mp3").into(),
+            artist: Some(artist.into()),
+            album: Some(album.into()),
+            track_no: Some(no),
+            title: Some(title.into()),
+            year: Some(2000),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn groups_sorts_and_filters() {
+        let lib = vec![
+            track("beta", "B1", 2, "Two"),
+            track("Alpha", "A1", 1, "One"),
+            track("beta", "B1", 1, "First"),
+            track("alpha", "A2", 1, "Other"),
+        ];
+        let mut c = Cache::default();
+        refresh(&mut c, &lib, 1, "");
+        let names: Vec<&str> = c.artists.iter().map(|a| a.label.as_str()).collect();
+        assert_eq!(names, ["Alpha  (2)", "beta  (2)"]);
+        assert_eq!(c.artists[0].albums[0].label, "A1 [2000]");
+        assert_eq!(c.artists[1].tracks(), [2, 0]);
+        assert_eq!(c.matches, 4);
+
+        // New query, same library: filters the cached order.
+        refresh(&mut c, &lib, 1, "BETA  fir");
+        assert_eq!(c.matches, 1);
+        assert_eq!(c.artists[0].tracks(), [2]);
+
+        // New library generation rebuilds the order.
+        let mut lib2 = lib.clone();
+        lib2.push(track("aardvark", "Z", 1, "Zed"));
+        refresh(&mut c, &lib2, 2, "");
+        assert_eq!(c.artists[0].name, "aardvark");
+        assert_eq!(c.matches, 5);
+    }
 }

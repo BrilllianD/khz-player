@@ -167,6 +167,18 @@ fn library_panel(c: &mut Criterion) {
         });
     }
 
+    // Typing in the search box: same library, new query each time.
+    let mut cache = Cache::default();
+    let mut flip = false;
+    g.bench_function("refresh_keystroke", |b| {
+        b.iter(|| {
+            flip = !flip;
+            let q = if flip { "artist 12" } else { "artist 1" };
+            library_panel::refresh(&mut cache, &lib, 1, q);
+            black_box(cache.matches)
+        })
+    });
+
     let theme = Theme::winamp();
     for (name, query) in [("tree_frame_all", ""), ("tree_frame_query", "artist 12")] {
         let mut cache = Cache::default();
