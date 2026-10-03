@@ -1,0 +1,33 @@
+[package]
+name = "rmp"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+
+[dependencies]
+eframe = { version = "0.36.2", default-features = false, features = ["glow", "wayland", "x11", "default_fonts"] }
+egui = "0.36.2"
+cpal = "0.18.2"
+symphonia = { version = "0.6.1", default-features = false, features = ["mp3", "flac", "vorbis", "ogg", "aac", "isomp4", "wav", "pcm", "id3v1", "id3v2", "ape"] }
+rubato = "5.0.1"
+realfft = "3.5.0"
+rtrb = "0.4"
+lofty = "0.25.4"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+walkdir = "2.5"
+toml = "1.1"
+serde = { version = "1", features = ["derive"] }
+directories = "6.0"
+notify = "8.2"
+crossbeam-channel = "0.5"
+mpris-server = "0.10"
+futures-lite = "2"
+async-channel = "2"
+rand = "0.9"
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.dev.package."*"]
+opt-level = 2

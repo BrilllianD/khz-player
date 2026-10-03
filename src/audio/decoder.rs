@@ -1,0 +1,200 @@
+//! symphonia 0.6 wrapper producing interleaved stereo f32.
+
+use std::fs::File;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use anyhow::{Context, anyhow};
+use symphonia::core::codecs::audio::{AudioDecoder, AudioDecoderOptions};
+use symphonia::core::errors::Error;
+use symphonia::core::formats::probe::Hint;
+use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType};
+use symphonia::core::io::MediaSourceStream;
+use symphonia::core::meta::MetadataOptions;
+use symphonia::core::units::{Time, TimeBase, Timestamp};
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrackInfo {
+    pub path: PathBuf,
+    pub sample_rate: u32,
+    pub channels: usize,
+    pub duration: Option<Duration>,
+    /// Average bitrate in kbps estimated from file size and duration.
+    pub kbps: Option<u32>,
+    pub codec: String,
+}
+
+pub struct Decoder {
+    reader: Box<dyn FormatReader>,
+    decoder: Box<dyn AudioDecoder>,
+    track_id: u32,
+    time_base: Option<TimeBase>,
+    pub info: TrackInfo,
+    tmp: Vec<f32>,
+    /// After an accurate seek, frames before this timestamp are dropped.
+    skip_until: Option<Timestamp>,
+}
+
+impl Decoder {
+    pub fn open(path: &Path) -> anyhow::Result<Self> {
+        let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
+        let size = file.metadata().map(|m| m.len()).unwrap_or(0);
+        let mss = MediaSourceStream::new(Box::new(file), Default::default());
+        let mut hint = Hint::new();
+        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            hint.with_extension(ext);
+        }
+        let reader = symphonia::default::get_probe()
+            .probe(
+                &hint,
+                mss,
+                FormatOptions::default(),
+                MetadataOptions::default(),
+            )
+            .map_err(|e| anyhow!("unsupported format: {e}"))?;
+        let track = reader
+            .default_track(TrackType::Audio)
+            .ok_or_else(|| anyhow!("no audio track"))?;
+        let track_id = track.id;
+        let time_base = track.time_base;
+        let params = track
+            .codec_params
+            .as_ref()
+            .and_then(|p| p.audio())
+            .ok_or_else(|| anyhow!("no audio codec parameters"))?
+            .clone();
+        let duration = time_base
+            .zip(track.duration)
+            .and_then(|(tb, d)| tb.calc_duration(d))
+            .map(|t| t.as_secs_f64())
+            .or_else(|| {
+                let n = track.num_frames?;
+                let r = params.sample_rate?;
+                Some(n as f64 / r as f64)
+            })
+            .filter(|s| s.is_finite() && *s > 0.0)
+            .map(Duration::from_secs_f64);
+        let decoder = symphonia::default::get_codecs()
+            .make_audio_decoder(&params, &AudioDecoderOptions::default())
+            .map_err(|e| anyhow!("unsupported codec: {e}"))?;
+        let kbps = duration
+            .filter(|d| d.as_secs_f64() > 0.5)
+            .map(|d| (size as f64 * 8.0 / d.as_secs_f64() / 1000.0).round() as u32);
+        let codec = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_uppercase();
+        let info = TrackInfo {
+            path: path.to_path_buf(),
+            sample_rate: params.sample_rate.unwrap_or(44100),
+            channels: params.channels.as_ref().map_or(2, |c| c.count()),
+            duration,
+            kbps,
+            codec,
+        };
+        Ok(Self {
+            reader,
+            decoder,
+            track_id,
+            time_base,
+            info,
+            tmp: Vec::new(),
+            skip_until: None,
+        })
+    }
+
+    /// Decodes the next packet and appends interleaved stereo frames to `out`.
+    /// Returns `Ok(false)` at end of stream.
+    pub fn next_frames(&mut self, out: &mut Vec<f32>) -> anyhow::Result<bool> {
+        loop {
+            let packet = match self.reader.next_packet() {
+                Ok(Some(p)) => p,
+                Ok(None) => return Ok(false),
+                Err(Error::ResetRequired) => return Ok(false),
+                Err(Error::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    return Ok(false);
+                }
+                Err(e) => return Err(anyhow!("read error: {e}")),
+            };
+            if packet.track_id != self.track_id {
+                continue;
+            }
+            let buf = match self.decoder.decode(&packet) {
+                Ok(b) => b,
+                Err(Error::DecodeError(e)) => {
+                    tracing::debug!("decode error (skipped): {e}");
+                    continue;
+                }
+                Err(Error::IoError(_)) => continue,
+                Err(e) => return Err(anyhow!("decode error: {e}")),
+            };
+            let frames = buf.frames();
+            if frames == 0 {
+                continue;
+            }
+            let ch = buf.spec().channels().count().max(1);
+            let rate = buf.spec().rate();
+            if rate != self.info.sample_rate {
+                // Rare (e.g. chained streams); the engine reacts to the change.
+                self.info.sample_rate = rate;
+            }
+            buf.copy_to_vec_interleaved(&mut self.tmp);
+
+            let mut skip = 0usize;
+            if let Some(until) = self.skip_until {
+                let behind = until.get() - packet.pts.get();
+                if behind >= frames as i64 {
+                    continue;
+                }
+                skip = behind.max(0) as usize;
+                self.skip_until = None;
+            }
+
+            let src = &self.tmp[skip * ch..frames * ch];
+            match ch {
+                1 => {
+                    out.reserve(src.len() * 2);
+                    for &s in src {
+                        out.push(s);
+                        out.push(s);
+                    }
+                }
+                2 => out.extend_from_slice(src),
+                _ => {
+                    // Simple downmix: front L/R plus the rest folded in equally.
+                    out.reserve(src.len() / ch * 2);
+                    for f in src.chunks_exact(ch) {
+                        let extra: f32 = f[2..].iter().sum::<f32>() / (ch - 2) as f32 * 0.5;
+                        out.push((f[0] + extra) * 0.7);
+                        out.push((f[1] + extra) * 0.7);
+                    }
+                }
+            }
+            return Ok(true);
+        }
+    }
+
+    /// Seeks to `pos`; returns the position actually reached.
+    pub fn seek(&mut self, pos: Duration) -> anyhow::Result<Duration> {
+        let time = Time::try_from_secs_f64(pos.as_secs_f64()).unwrap_or(Time::ZERO);
+        let seeked = self
+            .reader
+            .seek(
+                SeekMode::Accurate,
+                SeekTo::Time {
+                    time,
+                    track_id: Some(self.track_id),
+                },
+            )
+            .map_err(|e| anyhow!("seek failed: {e}"))?;
+        self.decoder.reset();
+        self.skip_until = Some(seeked.required_ts);
+        let reached = self
+            .time_base
+            .and_then(|tb| tb.calc_time(seeked.required_ts))
+            .map(|t| Duration::from_secs_f64(t.as_secs_f64().max(0.0)))
+            .unwrap_or(pos);
+        Ok(reached)
+    }
+}
