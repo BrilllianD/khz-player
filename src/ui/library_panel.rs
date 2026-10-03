@@ -33,7 +33,7 @@ pub struct Cache {
     generation: Option<u64>,
     /// Every track index in tree order (artist, album, disc, track, path).
     order: Vec<usize>,
-    /// Lowercased search text per track index.
+    /// Lowercased search text per track index; built on the first search.
     hay: Vec<String>,
     query: String,
     pub artists: Vec<Artist>,
@@ -60,19 +60,18 @@ pub fn refresh(cache: &mut Cache, library: &[Track], generation: u64, query: &st
         return;
     }
     if fresh_lib {
-        let mut order: Vec<usize> = (0..library.len()).collect();
-        order.sort_by_cached_key(|&i| {
+        let names: Vec<(String, String)> = library
+            .iter()
+            .map(|t| (t.group_artist().to_lowercase(), t.group_album().to_lowercase()))
+            .collect();
+        let key = |i: usize| {
             let t = &library[i];
-            (
-                t.group_artist().to_lowercase(),
-                t.group_album().to_lowercase(),
-                t.disc_no,
-                t.track_no,
-                &t.path,
-            )
-        });
+            (&names[i].0, &names[i].1, t.disc_no, t.track_no, &t.path)
+        };
+        let mut order: Vec<usize> = (0..library.len()).collect();
+        order.sort_by(|&a, &b| key(a).cmp(&key(b)));
         cache.order = order;
-        cache.hay = library.iter().map(haystack).collect();
+        cache.hay.clear();
         cache.generation = Some(generation);
     }
     cache.query = query.to_string();
@@ -81,6 +80,9 @@ pub fn refresh(cache: &mut Cache, library: &[Track], generation: u64, query: &st
         .split_whitespace()
         .map(str::to_string)
         .collect();
+    if !terms.is_empty() && cache.hay.is_empty() {
+        cache.hay = library.iter().map(haystack).collect();
+    }
     let mut artists: Vec<Artist> = Vec::new();
     let mut matches = 0;
     for i in cache.order.iter().copied() {
