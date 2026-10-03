@@ -25,12 +25,17 @@ Arguments are added to the current playlist and the first one starts playing.
 Without arguments rmp loads the last track; if you quit mid-track, it waits
 paused at the same spot.
 
-To install:
+To install for your user:
 
 ```sh
-cargo install --path .
-cp rmp.desktop ~/.local/share/applications/
+cargo install --path . --root ~/.local --locked
+install -Dm644 rmp.desktop ~/.local/share/applications/rmp.desktop
+update-desktop-database ~/.local/share/applications
 ```
+
+`--root ~/.local` puts the binary in `~/.local/bin`, which is on the PATH of an
+Omarchy session; `~/.cargo/bin` is not, so app launchers would not find `rmp`
+there.
 
 ## Keyboard
 
