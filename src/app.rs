@@ -1021,9 +1021,12 @@ impl eframe::App for App {
             self.save_now();
         }
 
-        if playing || !self.spectrum.is_idle() {
+        // Animation rate only when visible; a minimized window still ticks
+        // slowly for MPRIS position updates and pending saves.
+        let minimized = ctx.input(|i| i.viewport().minimized == Some(true));
+        if (playing || !self.spectrum.is_idle()) && !minimized {
             ctx.request_repaint_after(Duration::from_millis(33));
-        } else if self.cfg_changed.is_some() || !self.toasts.is_empty() {
+        } else if playing || self.cfg_changed.is_some() || !self.toasts.is_empty() {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
     }

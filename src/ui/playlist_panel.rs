@@ -113,7 +113,18 @@ fn rows(app: &mut App, ui: &mut Ui) {
     let mut remove_ctx = false;
     // Drag-reorder: set when a row drag starts, cleared on release.
     let drag_id = egui::Id::new(("pl-drag", active));
-    let dragging = ui.ctx().data(|d| d.get_temp::<bool>(drag_id)).unwrap_or(false);
+    let mut dragging = ui.ctx().data(|d| d.get_temp::<bool>(drag_id)).unwrap_or(false);
+    // The release can happen where this panel never sees it (outside the
+    // window, another tab, panel hidden); a flag with no button held, or with
+    // a new press, is left over from such a drag.
+    if dragging
+        && ui.input(|i| {
+            i.pointer.any_pressed() || !(i.pointer.any_down() || i.pointer.any_released())
+        })
+    {
+        ui.ctx().data_mut(|d| d.remove::<bool>(drag_id));
+        dragging = false;
+    }
     let pointer = ui.input(|i| i.pointer.interact_pos());
     let mut drag_start: Option<usize> = None;
     let mut drop_gap: Option<usize> = None;
@@ -143,7 +154,10 @@ fn rows(app: &mut App, ui: &mut Ui) {
             }
             let color = if current {
                 theme.text_bright
-            } else if !t.path.exists() && t.title.is_none() && t.duration_ms.is_none() {
+            } else if t.title.is_none()
+                && t.duration_ms.is_none()
+                && (app.failed.contains(&t.path) || !t.path.exists())
+            {
                 theme.muted
             } else {
                 theme.text
@@ -230,7 +244,8 @@ fn rows(app: &mut App, ui: &mut Ui) {
     }
     if dragging {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-        ui.ctx().request_repaint();
+        // Keeps edge scrolling going while the pointer holds still.
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
         if ui.input(|i| i.pointer.any_released()) {
             ui.ctx().data_mut(|d| d.remove::<bool>(drag_id));
             if let Some(gap) = drop_gap
