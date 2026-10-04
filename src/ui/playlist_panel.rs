@@ -154,9 +154,8 @@ fn rows(app: &mut App, ui: &mut Ui) {
             }
             let color = if current {
                 theme.text_bright
-            } else if t.title.is_none()
-                && t.duration_ms.is_none()
-                && (app.failed.contains(&t.path) || !t.path.exists())
+            } else if app.failed.contains(&t.path)
+                || (t.title.is_none() && t.duration_ms.is_none() && !t.path.exists())
             {
                 theme.muted
             } else {
