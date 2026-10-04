@@ -1025,7 +1025,7 @@ impl eframe::App for App {
         // slowly for MPRIS position updates and pending saves.
         let minimized = ctx.input(|i| i.viewport().minimized == Some(true));
         if (playing || !self.spectrum.is_idle()) && !minimized {
-            ctx.request_repaint_after(Duration::from_millis(33));
+            ctx.request_repaint_after(Duration::from_secs_f32(1.0 / self.cfg.animation_fps as f32));
         } else if playing || self.cfg_changed.is_some() || !self.toasts.is_empty() {
             ctx.request_repaint_after(Duration::from_millis(250));
         }

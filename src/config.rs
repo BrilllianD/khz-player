@@ -55,6 +55,8 @@ pub struct Config {
     pub show_playlist: bool,
     pub show_library: bool,
     pub time_remaining: bool,
+    /// Repaint rate while playing (spectrum, marquee). Each frame costs CPU.
+    pub animation_fps: u32,
     pub eq: EqConfig,
     pub window: WindowConfig,
 }
@@ -79,6 +81,7 @@ impl Default for Config {
             show_playlist: true,
             show_library: false,
             time_remaining: false,
+            animation_fps: 30,
             eq: EqConfig::default(),
             window: WindowConfig::default(),
         }
@@ -137,6 +140,7 @@ impl Config {
         let d = Self::default();
         self.volume = in_range(self.volume, 0.0, 1.0, d.volume);
         self.balance = in_range(self.balance, -1.0, 1.0, 0.0);
+        self.animation_fps = self.animation_fps.clamp(10, 60);
         let max = crate::eq_presets::MAX_DB;
         self.eq.preamp = in_range(self.eq.preamp, -max, max, 0.0);
         for b in &mut self.eq.bands {
@@ -228,13 +232,14 @@ mod tests {
         let path = dir.join("config.toml");
         std::fs::write(
             &path,
-            "volume = 3.0\nbalance = -7.0\n[eq]\npreamp = 40.0\nbands = [-50,0,0,0,0,0,0,0,0,nan]\n",
+            "volume = 3.0\nbalance = -7.0\nanimation_fps = 500\n[eq]\npreamp = 40.0\nbands = [-50,0,0,0,0,0,0,0,0,nan]\n",
         )
         .unwrap();
         let (c, err) = Config::load_from(&path);
         assert!(err.is_none());
         assert_eq!(c.volume, 1.0);
         assert_eq!(c.balance, -1.0);
+        assert_eq!(c.animation_fps, 60);
         assert_eq!(c.eq.preamp, 12.0);
         assert_eq!(c.eq.bands[0], -12.0);
         assert_eq!(c.eq.bands[9], 0.0);

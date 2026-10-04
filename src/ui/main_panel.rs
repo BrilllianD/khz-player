@@ -125,7 +125,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     let right_x = digits_r.right() + 8.0;
     let marquee_r = Rect::from_min_max(pos2(right_x, top), pos2(x1, top + 20.0));
     let title_text = marquee_text(app);
-    // Scrolls only while playing (App::logic already repaints at 30 fps then);
+    // Scrolls only while playing (App::logic already repaints at animation_fps then);
     // paused/stopped it holds at the start.
     let playing = app.state == PlayerState::Playing;
     let marquee_t = if playing { app.marquee_start.elapsed().as_secs_f32() } else { 0.0 };

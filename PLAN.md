@@ -126,7 +126,7 @@ Transposed DF2 per channel. Smoothing: every 64 frames `cur += (target-cur)*0.15
 Presets: XMMS/Audacious Winamp table (±20 scale) × 0.6 → ±12: Classical, Club, Dance, Full Bass, Full Bass & Treble, Full Treble, Laptop Speakers/Headphones, Large Hall, Live, Party, Pop, Reggae, Rock, Ska, Soft, Soft Rock, Techno (values as in agent table, e.g. Rock `8 4.8 -5.6 -8 -3.2 4 8.8 11.2 11.2 11.2`). User presets → `~/.config/rmp/eq_presets.toml` `[[preset]] name, preamp, bands=[..10]`.
 
 ### Spectrum (`audio/spectrum.rs`, UI thread)
-Drain tap into rolling 2048-sample buffer; Hann; realfft; 20 log bands 50 Hz–16 kHz (`f_k = 50*(320)^(k/20)`), max magnitude per band; dB `[-60,0] → [0,1]`; divide by `vol_lin` (floor 0.05) before dB; fall 0.08/frame, peak hold 15 frames then 0.02/frame; `request_repaint_after(33ms)` while playing.
+Drain tap into rolling 2048-sample buffer; Hann; realfft; 20 log bands 50 Hz–16 kHz (`f_k = 50*(320)^(k/20)`), max magnitude per band; dB `[-60,0] → [0,1]`; divide by `vol_lin` (floor 0.05) before dB; fall 0.08/frame, peak hold 15 frames then 0.02/frame; `request_repaint_after(1/animation_fps)` while playing (default 30).
 
 ## UI layout (logical points, Winamp 275×116 ≈ ×2)
 
@@ -177,7 +177,7 @@ CREATE TABLE eq_auto (path TEXT PRIMARY KEY, preset TEXT NOT NULL);
 ```
 Scanner: clear `seen`, set per visit, delete `seen=0`. Playlist item metadata resolved from `tracks` by path, else lofty on demand.
 
-`~/.config/rmp/config.toml`: version, library_roots, font_path, volume, balance, shuffle, repeat (off|all|one), last_playlist, last_track_index, show_eq/show_playlist/show_library, time_remaining, `[eq] enabled, auto, preamp, bands[10], preset`, `[window] x y w h`. Save debounced 1 s + on exit.
+`~/.config/rmp/config.toml`: version, library_roots, font_path, volume, balance, shuffle, repeat (off|all|one), last_playlist, last_track_index, show_eq/show_playlist/show_library, time_remaining, animation_fps (10-60, default 30), `[eq] enabled, auto, preamp, bands[10], preset`, `[window] x y w h`. Save debounced 1 s + on exit.
 
 ## Phases (each ends runnable)
 
