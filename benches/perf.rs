@@ -195,7 +195,7 @@ fn library_panel(c: &mut Criterion) {
         // Font atlas and layout caches are built on the first frames.
         for _ in 0..3 {
             ctx.run_ui(input(), |ui| {
-                library_panel::tree(ui, &cache, &lib, searching, &theme);
+                library_panel::tree(ui, &mut cache, &lib, searching, &theme);
             })
             .drop_without_applying_deltas();
         }
@@ -204,7 +204,7 @@ fn library_panel(c: &mut Criterion) {
                 input,
                 |i| {
                     ctx.run_ui(i, |ui| {
-                        black_box(library_panel::tree(ui, &cache, &lib, searching, &theme));
+                        black_box(library_panel::tree(ui, &mut cache, &lib, searching, &theme));
                     })
                     .drop_without_applying_deltas()
                 },

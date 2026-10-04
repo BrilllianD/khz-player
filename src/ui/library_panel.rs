@@ -1,6 +1,8 @@
 //! Library browser: search, rescan, Artist > Album > Track tree.
 
-use egui::{CollapsingHeader, RichText, Ui};
+use std::collections::HashSet;
+
+use egui::{Align2, FontId, Rect, RichText, Sense, Ui, pos2, vec2};
 
 use crate::app::App;
 use crate::library::{Track, format_duration};
@@ -38,6 +40,10 @@ pub struct Cache {
     query: String,
     pub artists: Vec<Artist>,
     pub matches: usize,
+    /// Expanded artist headers, by artist name.
+    open_artists: HashSet<String>,
+    /// Expanded album headers, by (artist, album) name.
+    open_albums: HashSet<(String, String)>,
 }
 
 fn haystack(t: &Track) -> String {
@@ -193,7 +199,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     });
     ui.separator();
 
-    if let Some(a) = tree(ui, &app.library_cache, &app.library, searching, &theme) {
+    if let Some(a) = tree(ui, &mut app.library_cache, &app.library, searching, &theme) {
         act = Some(a);
     }
 
@@ -204,80 +210,189 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     }
 }
 
+/// One line of the tree as drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Row {
+    /// Index into `Cache::artists`.
+    Artist(usize),
+    /// Artist index, album index within it.
+    Album(usize, usize),
+    /// Library track index.
+    Track(usize),
+}
+
+const ROW_H: f32 = 18.0;
+const INDENT: f32 = 14.0;
+
+impl Cache {
+    fn artist_open(&self, a: &Artist, searching: bool) -> bool {
+        (searching && self.matches <= 200) || self.open_artists.contains(&a.name)
+    }
+
+    fn album_open(&self, a: &Artist, al: &Album, searching: bool) -> bool {
+        (searching && self.matches <= 60)
+            || self.open_albums.contains(&(a.name.clone(), al.name.clone()))
+    }
+
+    /// Lines under the open headers, in tree order.
+    pub fn visible_rows(&self, searching: bool) -> Vec<Row> {
+        let mut rows = Vec::new();
+        for (ai, a) in self.artists.iter().enumerate() {
+            rows.push(Row::Artist(ai));
+            if !self.artist_open(a, searching) {
+                continue;
+            }
+            for (bi, al) in a.albums.iter().enumerate() {
+                rows.push(Row::Album(ai, bi));
+                if self.album_open(a, al, searching) {
+                    rows.extend(al.tracks.iter().map(|&i| Row::Track(i)));
+                }
+            }
+        }
+        rows
+    }
+}
+
+/// Small open/closed triangle for a header row.
+fn arrow(p: &egui::Painter, at: egui::Pos2, open: bool, color: egui::Color32) {
+    let s = 3.5;
+    let pts = if open {
+        vec![at + vec2(-s, -s * 0.6), at + vec2(s, -s * 0.6), at + vec2(0.0, s * 0.8)]
+    } else {
+        vec![at + vec2(-s * 0.6, -s), at + vec2(s * 0.8, 0.0), at + vec2(-s * 0.6, s)]
+    };
+    p.add(egui::Shape::convex_polygon(pts, color, egui::Stroke::NONE));
+}
+
 /// Artist > Album > Track tree for the cached view; returns the requested action.
-pub fn tree(ui: &mut Ui, cache: &Cache, lib: &[Track], searching: bool, theme: &Theme) -> Option<Act> {
+/// Only the rows in view are laid out, so a big library costs nothing per frame.
+pub fn tree(ui: &mut Ui, cache: &mut Cache, lib: &[Track], searching: bool, theme: &Theme) -> Option<Act> {
     let mut act: Option<Act> = None;
+    let mut toggle: Option<Row> = None;
+    let rows = cache.visible_rows(searching);
+    let header_font = egui::TextStyle::Body.resolve(ui.style());
+    let track_font = FontId::monospace(11.0);
     egui::ScrollArea::vertical()
         .id_salt("library-tree")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
-            for artist in &cache.artists {
-                let header = CollapsingHeader::new(
-                    RichText::new(&artist.label).color(theme.text_bright),
-                )
-                .id_salt(("artist", &artist.name))
-                .open(if searching && cache.matches <= 200 { Some(true) } else { None })
-                .show(ui, |ui| {
-                    for album in &artist.albums {
-                        let h = CollapsingHeader::new(
-                            RichText::new(&album.label).color(theme.text),
-                        )
-                        .id_salt(("album", &artist.name, &album.name))
-                        .open(if searching && cache.matches <= 60 { Some(true) } else { None })
-                        .show(ui, |ui| {
-                            for &i in &album.tracks {
-                                let t = &lib[i];
-                                let no = t.track_no.map(|n| format!("{n:02}. ")).unwrap_or_default();
-                                let dur = t.duration().map(format_duration).unwrap_or_default();
-                                let r = ui.add(
-                                    egui::Button::selectable(
-                                        false,
-                                        RichText::new(format!("{no}{}  {dur}", t.display_title()))
-                                            .monospace()
-                                            .size(11.0),
-                                    )
-                                    .frame_when_inactive(false),
-                                );
-                                if r.double_clicked() {
-                                    act = Some(Act::Replace(vec![i]));
-                                }
-                                r.context_menu(|ui| {
-                                    if ui.button("Add to playlist").clicked() {
-                                        act = Some(Act::Add(vec![i]));
-                                        ui.close();
-                                    }
-                                    if ui.button("Play now").clicked() {
-                                        act = Some(Act::Replace(vec![i]));
-                                        ui.close();
-                                    }
-                                });
-                                r.on_hover_text(t.path.to_string_lossy());
+        .show_rows(ui, ROW_H, rows.len(), |ui, range| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for &row in &rows[range] {
+                let (rect, resp) =
+                    ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
+                let p = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+                if resp.hovered() {
+                    p.rect_filled(rect, 0.0, theme.bg_dark);
+                }
+                let y = rect.center().y;
+                match row {
+                    Row::Artist(ai) => {
+                        let a = &cache.artists[ai];
+                        let x = rect.left() + 6.0;
+                        arrow(&p, pos2(x, y), cache.artist_open(a, searching), theme.text_dim);
+                        p.text(
+                            pos2(x + 10.0, y),
+                            Align2::LEFT_CENTER,
+                            &a.label,
+                            header_font.clone(),
+                            theme.text_bright,
+                        );
+                        if resp.clicked() {
+                            toggle = Some(row);
+                        }
+                        resp.context_menu(|ui| {
+                            if ui.button("Add artist to playlist").clicked() {
+                                act = Some(Act::Add(a.tracks()));
+                                ui.close();
+                            }
+                            if ui.button("Play artist (replace playlist)").clicked() {
+                                act = Some(Act::Replace(a.tracks()));
+                                ui.close();
                             }
                         });
-                        h.header_response.context_menu(|ui| {
+                    }
+                    Row::Album(ai, bi) => {
+                        let a = &cache.artists[ai];
+                        let al = &a.albums[bi];
+                        let x = rect.left() + 6.0 + INDENT;
+                        arrow(&p, pos2(x, y), cache.album_open(a, al, searching), theme.text_dim);
+                        p.text(
+                            pos2(x + 10.0, y),
+                            Align2::LEFT_CENTER,
+                            &al.label,
+                            header_font.clone(),
+                            theme.text,
+                        );
+                        if resp.clicked() {
+                            toggle = Some(row);
+                        }
+                        resp.context_menu(|ui| {
                             if ui.button("Add album to playlist").clicked() {
-                                act = Some(Act::Add(album.tracks.clone()));
+                                act = Some(Act::Add(al.tracks.clone()));
                                 ui.close();
                             }
                             if ui.button("Play album (replace playlist)").clicked() {
-                                act = Some(Act::Replace(album.tracks.clone()));
+                                act = Some(Act::Replace(al.tracks.clone()));
                                 ui.close();
                             }
                         });
                     }
-                });
-                header.header_response.context_menu(|ui| {
-                    if ui.button("Add artist to playlist").clicked() {
-                        act = Some(Act::Add(artist.tracks()));
-                        ui.close();
+                    Row::Track(i) => {
+                        let t = &lib[i];
+                        let dur = t.duration().map(format_duration).unwrap_or_default();
+                        let dur_rect = p.text(
+                            pos2(rect.right() - 6.0, y),
+                            Align2::RIGHT_CENTER,
+                            &dur,
+                            track_font.clone(),
+                            theme.text_dim,
+                        );
+                        let no = t.track_no.map(|n| format!("{n:02}. ")).unwrap_or_default();
+                        let name_clip = Rect::from_min_max(
+                            pos2(rect.left(), rect.top()),
+                            pos2(dur_rect.left() - 8.0, rect.bottom()),
+                        );
+                        p.with_clip_rect(name_clip.intersect(p.clip_rect())).text(
+                            pos2(rect.left() + 6.0 + 2.0 * INDENT, y),
+                            Align2::LEFT_CENTER,
+                            format!("{no}{}", t.display_title()),
+                            track_font.clone(),
+                            theme.text,
+                        );
+                        if resp.double_clicked() {
+                            act = Some(Act::Replace(vec![i]));
+                        }
+                        resp.context_menu(|ui| {
+                            if ui.button("Add to playlist").clicked() {
+                                act = Some(Act::Add(vec![i]));
+                                ui.close();
+                            }
+                            if ui.button("Play now").clicked() {
+                                act = Some(Act::Replace(vec![i]));
+                                ui.close();
+                            }
+                        });
+                        resp.on_hover_text(t.path.to_string_lossy());
                     }
-                    if ui.button("Play artist (replace playlist)").clicked() {
-                        act = Some(Act::Replace(artist.tracks()));
-                        ui.close();
-                    }
-                });
+                }
             }
         });
+    match toggle {
+        Some(Row::Artist(ai)) => {
+            let name = cache.artists[ai].name.clone();
+            if !cache.open_artists.remove(&name) {
+                cache.open_artists.insert(name);
+            }
+        }
+        Some(Row::Album(ai, bi)) => {
+            let a = &cache.artists[ai];
+            let key = (a.name.clone(), a.albums[bi].name.clone());
+            if !cache.open_albums.remove(&key) {
+                cache.open_albums.insert(key);
+            }
+        }
+        _ => {}
+    }
     act
 }
 
@@ -324,5 +439,36 @@ mod tests {
         refresh(&mut c, &lib2, 2, "");
         assert_eq!(c.artists[0].name, "aardvark");
         assert_eq!(c.matches, 5);
+    }
+
+    #[test]
+    fn visible_rows_follow_open_headers() {
+        let lib = vec![
+            track("a", "A1", 1, "One"),
+            track("a", "A1", 2, "Two"),
+            track("a", "A2", 1, "Other"),
+            track("b", "B1", 1, "Bee"),
+        ];
+        let mut c = Cache::default();
+        refresh(&mut c, &lib, 1, "");
+        assert_eq!(c.visible_rows(false), [Row::Artist(0), Row::Artist(1)]);
+
+        c.open_artists.insert("a".into());
+        c.open_albums.insert(("a".into(), "A1".into()));
+        assert_eq!(
+            c.visible_rows(false),
+            [
+                Row::Artist(0),
+                Row::Album(0, 0),
+                Row::Track(0),
+                Row::Track(1),
+                Row::Album(0, 1),
+                Row::Artist(1),
+            ]
+        );
+
+        // A small search result opens everything regardless of the sets.
+        refresh(&mut c, &lib, 1, "bee");
+        assert_eq!(c.visible_rows(true), [Row::Artist(0), Row::Album(0, 0), Row::Track(3)]);
     }
 }
