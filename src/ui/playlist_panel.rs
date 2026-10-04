@@ -132,13 +132,19 @@ fn rows(app: &mut App, ui: &mut Ui) {
     let mut area = egui::ScrollArea::vertical()
         .id_salt(("pl-rows", active))
         .auto_shrink([false, false]);
+    // Scroll offset and height of the list as last shown.
+    let view_id = egui::Id::new(("pl-view", active));
     if let Some(row) = app.scroll_to.take() {
-        // Scroll so that the row is visible near the top third.
-        let y = (row as f32 * (ROW_H + 0.0) - ui.available_height() / 3.0).max(0.0);
-        area = area.vertical_scroll_offset(y);
+        let view = ui.ctx().data(|d| d.get_temp::<(f32, f32)>(view_id));
+        let view = view.unwrap_or((f32::NAN, ui.available_height()));
+        if let Some(y) = scroll_target(row, view) {
+            area = area.vertical_scroll_offset(y);
+        }
     }
-    area.show_rows(ui, ROW_H, n, |ui, range| {
-        ui.spacing_mut().item_spacing.y = 0.0;
+    // show_rows takes its row stride from this ui's spacing, so zero it here,
+    // not inside the closure, or rows drift from where egui puts them.
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let out = area.show_rows(ui, ROW_H, n, |ui, range| {
         let pl = &app.playlists[active];
         for i in range {
             let t = &pl.tracks[i];
@@ -231,6 +237,8 @@ fn rows(app: &mut App, ui: &mut Ui) {
             }
         }
     });
+    let view = (out.state.offset.y, out.inner_rect.height());
+    ui.ctx().data_mut(|d| d.insert_temp(view_id, view));
 
     if let Some(i) = drag_start {
         let pl = &mut app.playlists[active];
@@ -282,6 +290,16 @@ fn rows(app: &mut App, ui: &mut Ui) {
     if remove_ctx {
         app.remove_selected();
     }
+}
+
+/// Scroll offset that brings `row` into a list view of `(offset, height)`, with
+/// the row a third of the way down; `None` when the row is already fully in view.
+fn scroll_target(row: usize, (top, height): (f32, f32)) -> Option<f32> {
+    let y = row as f32 * ROW_H;
+    if y >= top && y + ROW_H <= top + height {
+        return None;
+    }
+    Some((y - height / 3.0).max(0.0))
 }
 
 fn footer(app: &mut App, ui: &mut Ui) {
@@ -461,4 +479,26 @@ fn footer(app: &mut App, ui: &mut Ui) {
             );
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scroll_target_only_when_out_of_view() {
+        // View shows rows 10..20 (170..340 px).
+        let view = (170.0, 170.0);
+        assert_eq!(scroll_target(10, view), None);
+        assert_eq!(scroll_target(19, view), None);
+        // Below or above the view: row lands a third of the way down.
+        assert_eq!(scroll_target(20, view), Some(20.0 * ROW_H - 170.0 / 3.0));
+        assert_eq!(scroll_target(9, view), Some(9.0 * ROW_H - 170.0 / 3.0));
+        // Partly hidden counts as out of view.
+        assert!(scroll_target(10, (171.0, 170.0)).is_some());
+        // Near the top the offset clamps to 0.
+        assert_eq!(scroll_target(1, (500.0, 170.0)), Some(0.0));
+        // No view stored yet (NaN offset): always scroll.
+        assert!(scroll_target(0, (f32::NAN, 170.0)).is_some());
+    }
 }

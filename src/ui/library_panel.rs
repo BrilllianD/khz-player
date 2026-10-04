@@ -272,111 +272,115 @@ pub fn tree(ui: &mut Ui, cache: &mut Cache, lib: &[Track], searching: bool, them
     let rows = cache.visible_rows(searching);
     let header_font = egui::TextStyle::Body.resolve(ui.style());
     let track_font = FontId::monospace(11.0);
-    egui::ScrollArea::vertical()
-        .id_salt("library-tree")
-        .auto_shrink([false, false])
-        .show_rows(ui, ROW_H, rows.len(), |ui, range| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            for &row in &rows[range] {
-                let (rect, resp) =
-                    ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
-                let p = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
-                if resp.hovered() {
-                    p.rect_filled(rect, 0.0, theme.bg_dark);
-                }
-                let y = rect.center().y;
-                match row {
-                    Row::Artist(ai) => {
-                        let a = &cache.artists[ai];
-                        let x = rect.left() + 6.0;
-                        arrow(&p, pos2(x, y), cache.artist_open(a, searching), theme.text_dim);
-                        p.text(
-                            pos2(x + 10.0, y),
-                            Align2::LEFT_CENTER,
-                            &a.label,
-                            header_font.clone(),
-                            theme.text_bright,
-                        );
-                        if resp.clicked() {
-                            toggle = Some(row);
-                        }
-                        resp.context_menu(|ui| {
-                            if ui.button("Add artist to playlist").clicked() {
-                                act = Some(Act::Add(a.tracks()));
-                                ui.close();
-                            }
-                            if ui.button("Play artist (replace playlist)").clicked() {
-                                act = Some(Act::Replace(a.tracks()));
-                                ui.close();
-                            }
-                        });
+    // show_rows takes its row stride from this ui's spacing, so zero it
+    // here, not inside the closure, or rows drift from where egui puts them.
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        egui::ScrollArea::vertical()
+            .id_salt("library-tree")
+            .auto_shrink([false, false])
+            .show_rows(ui, ROW_H, rows.len(), |ui, range| {
+                for &row in &rows[range] {
+                    let (rect, resp) =
+                        ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
+                    let p = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+                    if resp.hovered() {
+                        p.rect_filled(rect, 0.0, theme.bg_dark);
                     }
-                    Row::Album(ai, bi) => {
-                        let a = &cache.artists[ai];
-                        let al = &a.albums[bi];
-                        let x = rect.left() + 6.0 + INDENT;
-                        arrow(&p, pos2(x, y), cache.album_open(a, al, searching), theme.text_dim);
-                        p.text(
-                            pos2(x + 10.0, y),
-                            Align2::LEFT_CENTER,
-                            &al.label,
-                            header_font.clone(),
-                            theme.text,
-                        );
-                        if resp.clicked() {
-                            toggle = Some(row);
+                    let y = rect.center().y;
+                    match row {
+                        Row::Artist(ai) => {
+                            let a = &cache.artists[ai];
+                            let x = rect.left() + 6.0;
+                            arrow(&p, pos2(x, y), cache.artist_open(a, searching), theme.text_dim);
+                            p.text(
+                                pos2(x + 10.0, y),
+                                Align2::LEFT_CENTER,
+                                &a.label,
+                                header_font.clone(),
+                                theme.text_bright,
+                            );
+                            if resp.clicked() {
+                                toggle = Some(row);
+                            }
+                            resp.context_menu(|ui| {
+                                if ui.button("Add artist to playlist").clicked() {
+                                    act = Some(Act::Add(a.tracks()));
+                                    ui.close();
+                                }
+                                if ui.button("Play artist (replace playlist)").clicked() {
+                                    act = Some(Act::Replace(a.tracks()));
+                                    ui.close();
+                                }
+                            });
                         }
-                        resp.context_menu(|ui| {
-                            if ui.button("Add album to playlist").clicked() {
-                                act = Some(Act::Add(al.tracks.clone()));
-                                ui.close();
+                        Row::Album(ai, bi) => {
+                            let a = &cache.artists[ai];
+                            let al = &a.albums[bi];
+                            let x = rect.left() + 6.0 + INDENT;
+                            arrow(&p, pos2(x, y), cache.album_open(a, al, searching), theme.text_dim);
+                            p.text(
+                                pos2(x + 10.0, y),
+                                Align2::LEFT_CENTER,
+                                &al.label,
+                                header_font.clone(),
+                                theme.text,
+                            );
+                            if resp.clicked() {
+                                toggle = Some(row);
                             }
-                            if ui.button("Play album (replace playlist)").clicked() {
-                                act = Some(Act::Replace(al.tracks.clone()));
-                                ui.close();
-                            }
-                        });
-                    }
-                    Row::Track(i) => {
-                        let t = &lib[i];
-                        let dur = t.duration().map(format_duration).unwrap_or_default();
-                        let dur_rect = p.text(
-                            pos2(rect.right() - 6.0, y),
-                            Align2::RIGHT_CENTER,
-                            &dur,
-                            track_font.clone(),
-                            theme.text_dim,
-                        );
-                        let no = t.track_no.map(|n| format!("{n:02}. ")).unwrap_or_default();
-                        let name_clip = Rect::from_min_max(
-                            pos2(rect.left(), rect.top()),
-                            pos2(dur_rect.left() - 8.0, rect.bottom()),
-                        );
-                        p.with_clip_rect(name_clip.intersect(p.clip_rect())).text(
-                            pos2(rect.left() + 6.0 + 2.0 * INDENT, y),
-                            Align2::LEFT_CENTER,
-                            format!("{no}{}", t.display_title()),
-                            track_font.clone(),
-                            theme.text,
-                        );
-                        if resp.double_clicked() {
-                            act = Some(Act::Replace(vec![i]));
+                            resp.context_menu(|ui| {
+                                if ui.button("Add album to playlist").clicked() {
+                                    act = Some(Act::Add(al.tracks.clone()));
+                                    ui.close();
+                                }
+                                if ui.button("Play album (replace playlist)").clicked() {
+                                    act = Some(Act::Replace(al.tracks.clone()));
+                                    ui.close();
+                                }
+                            });
                         }
-                        resp.context_menu(|ui| {
-                            if ui.button("Add to playlist").clicked() {
-                                act = Some(Act::Add(vec![i]));
-                                ui.close();
-                            }
-                            if ui.button("Play now").clicked() {
+                        Row::Track(i) => {
+                            let t = &lib[i];
+                            let dur = t.duration().map(format_duration).unwrap_or_default();
+                            let dur_rect = p.text(
+                                pos2(rect.right() - 6.0, y),
+                                Align2::RIGHT_CENTER,
+                                &dur,
+                                track_font.clone(),
+                                theme.text_dim,
+                            );
+                            let no = t.track_no.map(|n| format!("{n:02}. ")).unwrap_or_default();
+                            let name_clip = Rect::from_min_max(
+                                pos2(rect.left(), rect.top()),
+                                pos2(dur_rect.left() - 8.0, rect.bottom()),
+                            );
+                            p.with_clip_rect(name_clip.intersect(p.clip_rect())).text(
+                                pos2(rect.left() + 6.0 + 2.0 * INDENT, y),
+                                Align2::LEFT_CENTER,
+                                format!("{no}{}", t.display_title()),
+                                track_font.clone(),
+                                theme.text,
+                            );
+                            if resp.double_clicked() {
                                 act = Some(Act::Replace(vec![i]));
-                                ui.close();
                             }
-                        });
-                        resp.on_hover_text(t.path.to_string_lossy());
+                            resp.context_menu(|ui| {
+                                if ui.button("Add to playlist").clicked() {
+                                    act = Some(Act::Add(vec![i]));
+                                    ui.close();
+                                }
+                                if ui.button("Play now").clicked() {
+                                    act = Some(Act::Replace(vec![i]));
+                                    ui.close();
+                                }
+                            });
+                            resp.on_hover_text(t.path.to_string_lossy());
+                        }
                     }
                 }
-            }
-        });
+            });
+    });
     match toggle {
         Some(Row::Artist(ai)) => {
             let name = cache.artists[ai].name.clone();
