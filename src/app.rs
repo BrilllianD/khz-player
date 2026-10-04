@@ -744,6 +744,7 @@ impl App {
         self.auto_eq_for(&info.path);
         self.now_track = Some(track);
         self.now = Some(info);
+        self.sync_title();
         self.marquee_start = Instant::now();
         self.scroll_to = self
             .playlists
@@ -800,7 +801,17 @@ impl App {
             && let Some(fresh) = by_path.get(now.path.as_path())
         {
             self.now_track = Some((*fresh).clone());
+            self.sync_title();
         }
+    }
+
+    /// Window title follows the current track, like Winamp's "Artist - Title - Winamp".
+    fn sync_title(&self) {
+        let title = match &self.now_track {
+            Some(t) => format!("{} - rmp", t.display_name()),
+            None => "rmp".into(),
+        };
+        self.ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
     }
 
     fn handle_mpris(&mut self, ctx: &egui::Context) {
