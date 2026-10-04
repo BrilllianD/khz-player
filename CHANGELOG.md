@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.2 — 2026-10-04
+
+- The window title shows the current track: `Artist - Title - rmp`.
+- New `animation_fps` setting in `config.toml` (10–60, default 30): how often
+  the window repaints while playing. Lower values use less CPU, e.g. about
+  11 % at 30 fps and 7 % at 20 fps on a Ryzen 7 4700U.
+- The playlist follows the playing track again on auto-advance, Next/Prev
+  and jumps. It scrolls only when that track is out of view, so a
+  double-click on a visible row leaves the list where it is.
+- Playlist and library scroll smoothly, without small jumps, and no longer
+  show blank space after the last row.
+- The library tree lays out only the rows in view, so a big library no
+  longer costs CPU every frame.
+- A file that failed to load shows muted even when it has tags.
+
 ## 0.1.1 — 2026-10-03
 
 Fixes.
