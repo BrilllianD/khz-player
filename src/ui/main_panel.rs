@@ -38,13 +38,6 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             FontId::monospace(12.0),
             theme.text_bright,
         );
-        p.text(
-            title.center(),
-            Align2::CENTER_CENTER,
-            &theme.name,
-            FontId::monospace(10.0),
-            theme.text_dim,
-        );
     }
     let bsz = vec2(18.0, 14.0);
     let close_r = Rect::from_center_size(pos2(title.right() - 14.0, title.center().y), bsz);
