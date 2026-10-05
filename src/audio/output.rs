@@ -349,6 +349,10 @@ impl CallbackState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cpal::Sample;
+
+    use crate::audio::dsp::EqParams;
+    use crate::config::BANDS;
 
     fn range(
         channels: u16,
@@ -407,5 +411,152 @@ mod tests {
                 .all(|(f, c)| *f == SampleFormat::F32 && c.channels == 2 && c.sample_rate == 44100)
         );
         assert_eq!(got[1].1.buffer_size, BufferSize::Default);
+    }
+
+    const RATE: u32 = 48000;
+
+    /// A stereo callback at 48 kHz on plain ring ends. Returns the engine side
+    /// of the ring, the UI side of the tap and the state under test.
+    fn callback(
+        shared: &Arc<Shared>,
+        ring_len: usize,
+        tap_len: usize,
+    ) -> (rtrb::Producer<f32>, rtrb::Consumer<f32>, CallbackState) {
+        let (ring_tx, ring_rx) = rtrb::RingBuffer::<f32>::new(ring_len);
+        let (tap_tx, tap_rx) = rtrb::RingBuffer::<f32>::new(tap_len);
+        let st = CallbackState::new(shared.clone(), ring_rx, tap_tx, RATE, 2);
+        (ring_tx, tap_rx, st)
+    }
+
+    fn push(ring: &mut rtrb::Producer<f32>, frames: &[(f32, f32)]) {
+        for &(l, r) in frames {
+            ring.push(l).unwrap();
+            ring.push(r).unwrap();
+        }
+    }
+
+    /// Runs the callback over an empty ring long enough for the 6 ms fade-in to finish.
+    fn warm_up(st: &mut CallbackState) {
+        st.fill(&mut [0.0f32; 1024]);
+        assert_eq!(st.fade, 1.0);
+    }
+
+    #[test]
+    fn fill_flush_ack_clears_ring_and_flag() {
+        let shared = Arc::new(Shared::new(1.0, 0.0));
+        let (mut ring, _tap, mut st) = callback(&shared, 1024, 64);
+        push(&mut ring, &[(0.5, 0.5); 100]);
+        shared.flush.store(true, Ordering::Release);
+
+        let mut out = [1.0f32; 64];
+        st.fill(&mut out);
+
+        assert!(!shared.flush.load(Ordering::Acquire));
+        assert_eq!(ring.slots(), 1024, "ring still holds samples");
+        assert_eq!(shared.consumed.load(Ordering::Acquire), 0);
+        assert!(out.iter().all(|&s| s == 0.0));
+    }
+
+    #[test]
+    fn fill_paused_at_fade_zero_outputs_equilibrium_and_consumes_nothing() {
+        let shared = Arc::new(Shared::new(1.0, 0.0));
+        let (mut ring, _tap, mut st) = callback(&shared, 1024, 64);
+        push(&mut ring, &[(0.5, 0.5); 64]);
+        shared.paused.store(true, Ordering::Relaxed);
+
+        // u16 silence is the midpoint, not 0.
+        let mut out = [0u16; 64];
+        st.fill(&mut out);
+
+        assert!(out.iter().all(|&s| s == u16::EQUILIBRIUM));
+        assert_eq!(ring.slots(), 1024 - 128);
+        assert_eq!(shared.consumed.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn fill_underrun_zero_fills_and_counts_only_popped_frames() {
+        let shared = Arc::new(Shared::new(1.0, 0.0));
+        let (mut ring, _tap, mut st) = callback(&shared, 1024, 64);
+        push(&mut ring, &[(0.5, -0.5); 10]);
+
+        let mut out = [1.0f32; 64 * 2];
+        st.fill(&mut out);
+
+        assert_eq!(shared.consumed.load(Ordering::Acquire), 10);
+        assert_eq!(ring.slots(), 1024);
+        assert!(out[..20].iter().all(|&s| s != 0.0));
+        assert!(out[20..].iter().all(|&s| s == 0.0));
+    }
+
+    #[test]
+    fn fill_taps_mono_post_eq_and_counts_tap_overflow() {
+        let shared = Arc::new(Shared::new(0.5, 0.0));
+        let params = EqParams {
+            enabled: true,
+            preamp_db: -6.0,
+            bands_db: [0.0; BANDS],
+        };
+        shared.set_eq(&params);
+        let (mut ring, mut tap, mut st) = callback(&shared, 1024, 16);
+        let input: Vec<(f32, f32)> = (0..64)
+            .map(|i| {
+                let x = (i as f32 * 0.3).sin();
+                (0.6 * x, 0.2 * x)
+            })
+            .collect();
+        push(&mut ring, &input);
+
+        st.fill(&mut [0.0f32; 64 * 2]);
+
+        // Same EQ run separately on the same input: the tap must match it exactly.
+        let mut expect: Vec<f32> = input.iter().flat_map(|&(l, r)| [l, r]).collect();
+        Equalizer::new(RATE as f64).process(&mut expect, &params);
+        let got: Vec<f32> = std::iter::from_fn(|| tap.pop().ok()).collect();
+        assert_eq!(got.len(), 16);
+        for (i, &s) in got.iter().enumerate() {
+            let want = (expect[i * 2] + expect[i * 2 + 1]) * 0.5;
+            let raw = (input[i].0 + input[i].1) * 0.5;
+            assert!((s - want).abs() < 1e-6, "frame {i}: {s} vs {want}");
+            if raw.abs() > 0.05 {
+                assert!((s - raw).abs() > 1e-3, "frame {i} is not post-EQ");
+            }
+        }
+        assert_eq!(shared.tap_overflow.load(Ordering::Relaxed), 64 - 16);
+    }
+
+    #[test]
+    fn fill_i16_maps_full_scale_through_soft_clip() {
+        let shared = Arc::new(Shared::new(1.0, 0.0));
+        let (mut ring, _tap, mut st) = callback(&shared, 1024, 64);
+        warm_up(&mut st);
+        push(&mut ring, &[(1.0, -1.0); 16]);
+
+        let mut out = [0i16; 16 * 2];
+        st.fill(&mut out);
+
+        let want = soft_clip(1.0) * i16::MAX as f32;
+        for &[l, r] in out.as_chunks::<2>().0 {
+            assert!((l as f32 - want).abs() <= 2.0, "{} vs {want}", l);
+            assert!((r as f32 + want).abs() <= 2.0, "{} vs -{want}", r);
+        }
+    }
+
+    #[test]
+    fn fill_ramps_volume_step_over_ten_ms() {
+        let shared = Arc::new(Shared::new(0.0, 0.0));
+        let (mut ring, _tap, mut st) = callback(&shared, 4096, 64);
+        warm_up(&mut st);
+        assert_eq!(st.gain, (0.0, 0.0));
+        shared.volume.store(1.0);
+        push(&mut ring, &[(0.5, 0.5); 600]);
+
+        let mut out = [0.0f32; 600 * 2];
+        st.fill(&mut out);
+
+        let left: Vec<f32> = out.iter().step_by(2).copied().collect();
+        assert!(left[0] < 0.002, "first frame {}", left[0]);
+        assert!((left[240] - 0.25).abs() < 0.005, "mid-ramp {}", left[240]);
+        assert!((left[480] - 0.5).abs() < 1e-6, "frame 480 {}", left[480]);
+        assert!(left.windows(2).all(|w| w[1] >= w[0]));
     }
 }
