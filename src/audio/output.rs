@@ -33,9 +33,15 @@ pub struct OutputParts {
     pub ring: rtrb::Producer<f32>,
     /// UI side of the spectrum tap (mono f32 at `rate`).
     pub tap: rtrb::Consumer<f32>,
+    /// Output sample rate of the stream.
+    pub rate: u32,
 }
 
-pub fn open(shared: Arc<Shared>) -> anyhow::Result<OutputParts> {
+/// Opens the default output device. Does not touch `shared.out_rate`: the
+/// caller hands `rate` to the engine together with `ring`, so position and
+/// rate change at the same moment. `repaint` wakes the UI when the stream
+/// fails for good.
+pub fn open(shared: Arc<Shared>, repaint: egui::Context) -> anyhow::Result<OutputParts> {
     let host = cpal::default_host();
     let device = host
         .default_output_device()
@@ -55,7 +61,6 @@ pub fn open(shared: Arc<Shared>) -> anyhow::Result<OutputParts> {
     };
     let attempts = attempt_list(&supported, &default);
 
-    shared.out_rate.store(rate, Ordering::Relaxed);
     let ring_len = ((rate as f32 * RING_SECONDS) as usize) * 2;
     let mut last_err = None;
     for (format, config) in attempts {
@@ -70,7 +75,7 @@ pub fn open(shared: Arc<Shared>) -> anyhow::Result<OutputParts> {
             rate,
             config.channels as usize,
         );
-        let stream = match build(&device, format, config, state) {
+        let stream = match build(&device, format, config, state, repaint.clone()) {
             Ok(stream) => stream,
             Err(e) => {
                 tracing::debug!("stream config {format} {config:?} failed: {e}");
@@ -92,6 +97,7 @@ pub fn open(shared: Arc<Shared>) -> anyhow::Result<OutputParts> {
             output: Output { _stream: stream },
             ring: ring_tx,
             tap: tap_rx,
+            rate,
         });
     }
     Err(anyhow!(
@@ -194,21 +200,22 @@ fn build(
     format: SampleFormat,
     config: StreamConfig,
     state: CallbackState,
+    repaint: egui::Context,
 ) -> Result<cpal::Stream, cpal::Error> {
     // `SampleFormat` is non-exhaustive; unknown formats fall back to f32.
     match format {
-        SampleFormat::I8 => build_typed::<i8>(device, config, state),
-        SampleFormat::I16 => build_typed::<i16>(device, config, state),
-        SampleFormat::I24 => build_typed::<I24>(device, config, state),
-        SampleFormat::I32 => build_typed::<i32>(device, config, state),
-        SampleFormat::I64 => build_typed::<i64>(device, config, state),
-        SampleFormat::U8 => build_typed::<u8>(device, config, state),
-        SampleFormat::U16 => build_typed::<u16>(device, config, state),
-        SampleFormat::U24 => build_typed::<U24>(device, config, state),
-        SampleFormat::U32 => build_typed::<u32>(device, config, state),
-        SampleFormat::U64 => build_typed::<u64>(device, config, state),
-        SampleFormat::F64 => build_typed::<f64>(device, config, state),
-        _ => build_typed::<f32>(device, config, state),
+        SampleFormat::I8 => build_typed::<i8>(device, config, state, repaint),
+        SampleFormat::I16 => build_typed::<i16>(device, config, state, repaint),
+        SampleFormat::I24 => build_typed::<I24>(device, config, state, repaint),
+        SampleFormat::I32 => build_typed::<i32>(device, config, state, repaint),
+        SampleFormat::I64 => build_typed::<i64>(device, config, state, repaint),
+        SampleFormat::U8 => build_typed::<u8>(device, config, state, repaint),
+        SampleFormat::U16 => build_typed::<u16>(device, config, state, repaint),
+        SampleFormat::U24 => build_typed::<U24>(device, config, state, repaint),
+        SampleFormat::U32 => build_typed::<u32>(device, config, state, repaint),
+        SampleFormat::U64 => build_typed::<u64>(device, config, state, repaint),
+        SampleFormat::F64 => build_typed::<f64>(device, config, state, repaint),
+        _ => build_typed::<f32>(device, config, state, repaint),
     }
 }
 
@@ -216,6 +223,7 @@ fn build_typed<T>(
     device: &cpal::Device,
     config: StreamConfig,
     mut st: CallbackState,
+    repaint: egui::Context,
 ) -> Result<cpal::Stream, cpal::Error>
 where
     T: SizedSample + FromSample<f32> + Send + 'static,
@@ -224,12 +232,25 @@ where
     device.build_output_stream::<T, _, _>(
         config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| st.fill(data),
-        // Xruns can come in bursts; count them and let the engine log the total.
-        move |e| {
-            if e.kind() == cpal::ErrorKind::Xrun {
+        move |e| match e.kind() {
+            // Xruns can come in bursts; count them and let the engine log the total.
+            cpal::ErrorKind::Xrun => {
                 shared.xruns.fetch_add(1, Ordering::Relaxed);
-            } else {
-                tracing::warn!("audio stream error: {e}");
+            }
+            // The stream keeps running: no realtime priority, or rerouted
+            // to a new default device.
+            cpal::ErrorKind::RealtimeDenied | cpal::ErrorKind::DeviceChanged => {
+                tracing::info!("audio stream: {e}");
+            }
+            // Anything else may have stopped the stream (device unplugged,
+            // sound server restarted); the UI reopens the output.
+            _ => {
+                if shared.device_lost.swap(true, Ordering::AcqRel) {
+                    tracing::debug!("audio stream error: {e}");
+                } else {
+                    tracing::warn!("audio stream error: {e}");
+                    repaint.request_repaint();
+                }
             }
         },
         None,

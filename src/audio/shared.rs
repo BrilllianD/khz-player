@@ -41,6 +41,9 @@ pub struct Shared {
     pub tap_overflow: AtomicU64,
     /// Buffer underruns/overruns reported by the stream; the engine logs the count.
     pub xruns: AtomicU64,
+    /// The stream reported a fatal error (device gone, server restarted) or
+    /// never opened. The engine stops waiting for flush acks; the UI reopens.
+    pub device_lost: AtomicBool,
 }
 
 impl Shared {
@@ -58,6 +61,7 @@ impl Shared {
             eq_bands: Default::default(),
             tap_overflow: AtomicU64::new(0),
             xruns: AtomicU64::new(0),
+            device_lost: AtomicBool::new(false),
         }
     }
 

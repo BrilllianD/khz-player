@@ -23,6 +23,8 @@ const SAVE_DEBOUNCE: Duration = Duration::from_secs(1);
 /// Save anyway after this long of continuous changes (a long slider drag).
 const SAVE_CAP: Duration = Duration::from_secs(10);
 const TOAST_TIME: Duration = Duration::from_secs(5);
+/// Minimum time between attempts to reopen a lost audio output.
+const REOPEN_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Text prompt shown as a modal (no native file dialogs).
 #[derive(Debug, Clone, PartialEq)]
@@ -62,6 +64,10 @@ pub struct App {
     pub nerd_font: bool,
 
     pub audio: AudioHandle,
+    /// Last attempt to reopen the audio output.
+    last_reopen: Option<Instant>,
+    /// The user was told the output is gone; cleared when it is back.
+    reopen_failing: bool,
     pub spectrum: Spectrum,
     pub state: PlayerState,
     /// Decoder info of the loaded track.
@@ -189,6 +195,8 @@ impl App {
             theme_watch,
             nerd_font,
             audio,
+            last_reopen: None,
+            reopen_failing: false,
             spectrum,
             state: PlayerState::Stopped,
             now: None,
@@ -227,6 +235,7 @@ impl App {
         }
         if let Some(e) = app.audio.init_error.clone() {
             app.toast(format!("Audio output unavailable: {e}"));
+            app.reopen_failing = true;
         }
 
         if !args.is_empty() {
@@ -695,6 +704,36 @@ impl App {
         }
     }
 
+    /// Reopens the audio output after the device went away or never opened,
+    /// at most every `REOPEN_INTERVAL`. The engine keeps its track and state.
+    fn handle_output_loss(&mut self, now: Instant) {
+        let lost = self.audio.shared.device_lost.load(std::sync::atomic::Ordering::Acquire);
+        if !lost && self.audio.init_error.is_none() {
+            return;
+        }
+        // Nothing else may repaint while paused or stopped.
+        self.ctx.request_repaint_after(REOPEN_INTERVAL);
+        if self.last_reopen.is_some_and(|t| now.duration_since(t) < REOPEN_INTERVAL) {
+            return;
+        }
+        self.last_reopen = Some(now);
+        match self.audio.reopen() {
+            Ok(rate) => {
+                self.reopen_failing = false;
+                self.spectrum = Spectrum::new(rate);
+                self.refresh_prefetch();
+                self.toast("Audio output restored");
+            }
+            Err(e) => {
+                tracing::debug!("reopen audio output: {e:#}");
+                if !self.reopen_failing {
+                    self.reopen_failing = true;
+                    self.toast("Audio device lost, retrying");
+                }
+            }
+        }
+    }
+
     /// Moves on from a track that could not be loaded, unless every track of
     /// the list has failed in a row.
     fn skip_failed(&mut self, path: &Path) {
@@ -1002,6 +1041,7 @@ impl eframe::App for App {
         self.last_frame = now;
 
         self.handle_audio_events();
+        self.handle_output_loss(now);
         self.handle_scan_events();
         self.handle_mpris(ctx);
         self.handle_theme(ctx);

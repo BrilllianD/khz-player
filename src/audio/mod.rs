@@ -8,6 +8,7 @@ pub mod spectrum;
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender};
@@ -23,7 +24,7 @@ pub enum PlayerState {
     Paused,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Command {
     Load { path: PathBuf, play: bool },
     /// Loads `path` paused at `at`; restores the previous session.
@@ -36,6 +37,8 @@ pub enum Command {
     SeekRel(i64),
     /// Opens the next track ahead of time for gapless playback.
     PrefetchNext(Option<PathBuf>),
+    /// The output was reopened: feed `ring` at `rate` from now on.
+    SetOutput { ring: rtrb::Producer<f32>, rate: u32 },
     Shutdown,
 }
 
@@ -62,6 +65,7 @@ pub struct AudioHandle {
     pub tap: Option<rtrb::Consumer<f32>>,
     pub init_error: Option<String>,
     _output: Option<output::Output>,
+    repaint: egui::Context,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -70,19 +74,24 @@ impl AudioHandle {
         let shared = Arc::new(Shared::new(volume, balance));
         let (tx, rx) = crossbeam_channel::unbounded();
         let (ev_tx, ev_rx) = crossbeam_channel::unbounded();
-        let (ring, tap, out, init_error) = match output::open(shared.clone()) {
-            Ok(p) => (p.ring, Some(p.tap), Some(p.output), None),
+        let (ring, tap, out, init_error) = match output::open(shared.clone(), repaint.clone()) {
+            Ok(p) => {
+                shared.out_rate.store(p.rate, Ordering::Relaxed);
+                (p.ring, Some(p.tap), Some(p.output), None)
+            }
             Err(e) => {
                 tracing::error!("audio output unavailable: {e:#}");
-                // Keep the engine alive with a ring nobody reads so commands still work.
+                // Keep the engine alive with a ring nobody reads so commands
+                // still work; flushes must not wait for a callback that never runs.
+                shared.device_lost.store(true, Ordering::Release);
                 let (ring, _) = rtrb::RingBuffer::new(2);
                 (ring, None, None, Some(format!("{e:#}")))
             }
         };
-        let eng_shared = shared.clone();
+        let (eng_shared, eng_repaint) = (shared.clone(), repaint.clone());
         let thread = std::thread::Builder::new()
             .name("audio-engine".into())
-            .spawn(move || engine::run(rx, ev_tx, eng_shared, ring, repaint))
+            .spawn(move || engine::run(rx, ev_tx, eng_shared, ring, eng_repaint))
             .expect("spawn audio engine");
         Self {
             tx,
@@ -91,8 +100,37 @@ impl AudioHandle {
             tap,
             init_error,
             _output: out,
+            repaint,
             thread: Some(thread),
         }
+    }
+
+    /// Opens the default output again after a device loss or a failed start
+    /// and hands the new ring to the engine. Returns the new output rate.
+    pub fn reopen(&mut self) -> anyhow::Result<u32> {
+        // Close the old stream first: a device that is still there may not
+        // allow a second stream, and its callback must stop counting `consumed`
+        // before the engine resyncs to the new ring.
+        self._output = None;
+        self.tap = None;
+        // Cleared before the new stream starts so an error it reports right
+        // away is not lost.
+        self.shared.device_lost.store(false, Ordering::Release);
+        let p = match output::open(self.shared.clone(), self.repaint.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                self.shared.device_lost.store(true, Ordering::Release);
+                return Err(e);
+            }
+        };
+        self._output = Some(p.output);
+        self.tap = Some(p.tap);
+        self.init_error = None;
+        self.send(Command::SetOutput {
+            ring: p.ring,
+            rate: p.rate,
+        });
+        Ok(p.rate)
     }
 
     pub fn send(&self, cmd: Command) {

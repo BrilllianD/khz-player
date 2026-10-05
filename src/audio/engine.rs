@@ -170,17 +170,20 @@ impl Engine {
 
     /// Discards everything buffered in the ring and waits for the callback to
     /// do it. Pending transitions are dropped: callers that keep the current
-    /// decoder must announce them first.
+    /// decoder must announce them first. With the device lost no callback
+    /// runs, so nothing waits; the next stream acks the flag on its first call.
     fn flush(&mut self) {
         self.buf.clear();
         self.buf_pos = 0;
         self.shared.flush.store(true, Ordering::Release);
-        let start = Instant::now();
-        while self.shared.flush.load(Ordering::Acquire) && start.elapsed() < FLUSH_TIMEOUT {
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        if self.shared.flush.load(Ordering::Acquire) {
-            tracing::debug!("flush not acknowledged by audio callback");
+        if !self.shared.device_lost.load(Ordering::Acquire) {
+            let start = Instant::now();
+            while self.shared.flush.load(Ordering::Acquire) && start.elapsed() < FLUSH_TIMEOUT {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            if self.shared.flush.load(Ordering::Acquire) {
+                tracing::debug!("flush not acknowledged by audio callback");
+            }
         }
         self.pushed_total = self.consumed();
         self.transitions.clear();
@@ -236,6 +239,7 @@ impl Engine {
                 }
             }
             Command::PrefetchNext(path) => self.prefetch(path),
+            Command::SetOutput { ring, rate } => self.set_output(ring, rate),
             Command::Shutdown => return false,
         }
         true
@@ -329,6 +333,42 @@ impl Engine {
                 });
             }
         }
+    }
+
+    /// Switches to a reopened output. Whatever sat in the old ring is gone, so
+    /// the current track restarts from the position last heard, resampled to
+    /// the new rate. The state is kept: paused stays paused. The prefetched
+    /// decoder is dropped; the app announces the next track again.
+    fn set_output(&mut self, ring: rtrb::Producer<f32>, rate: u32) {
+        // A pending gapless successor is already the current decoder and none
+        // of it was heard yet: it starts from zero (`seek` announces it).
+        let pos = if self.transitions.is_empty() {
+            self.position()
+        } else {
+            Duration::ZERO
+        };
+        self.ring = ring;
+        self.out_rate = rate;
+        self.shared.out_rate.store(rate, Ordering::Relaxed);
+        self.cancel_prefetch();
+        // Frames resampled for the old rate.
+        self.buf.clear();
+        self.buf_pos = 0;
+        self.pushed_total = self.consumed();
+        let Some(cur) = self.cur.as_mut() else {
+            self.transitions.clear();
+            return;
+        };
+        if let Err(e) = rebuild_resampler(cur, rate) {
+            tracing::warn!("resampler for {rate} Hz: {e:#}");
+            self.stop();
+            self.emit(Event::Error {
+                path: None,
+                msg: format!("{e:#}"),
+            });
+            return;
+        }
+        self.seek(pos);
     }
 
     /// Drops the prefetched decoder and makes any open in flight stale.
@@ -730,6 +770,79 @@ mod tests {
         assert!(!events.try_iter().any(|ev| matches!(ev, Event::Advanced(_))));
         assert_eq!(e.last_path.as_ref(), Some(&c));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn set_output_switches_ring_and_rate() {
+        let dir = crate::config::test_dir("engine-set-output");
+        let path = dir.join("t.wav");
+        crate::library::scanner::tests::write_wav(&path, 8000 * 2);
+        let (mut e, events, mut old_rx) = test_engine();
+        e.load(path, true);
+        e.fill();
+        // The callback played 100 ms of it.
+        let heard = 4800;
+        for _ in 0..heard * 2 {
+            old_rx.pop().unwrap();
+        }
+        e.shared.consumed.fetch_add(heard, Ordering::AcqRel);
+        assert!((e.position().as_secs_f64() - 0.1).abs() < 1e-6);
+        let old_left = old_rx.slots();
+        events.try_iter().for_each(drop);
+
+        let (ring, new_rx) = rtrb::RingBuffer::new(44100 * 2 * 3 / 10);
+        assert!(e.handle(Command::SetOutput { ring, rate: 44100 }));
+        assert_eq!(e.out_rate, 44100);
+        assert_eq!(e.shared.out_rate(), 44100);
+        assert_eq!(e.state, PlayerState::Playing);
+        let pos = e.position().as_secs_f64();
+        assert!((pos - 0.1).abs() < 0.010, "position {pos}");
+        assert!(events.try_iter().any(|ev| matches!(ev, Event::Seeked(_))));
+
+        e.fill();
+        assert!(old_rx.is_abandoned());
+        assert_eq!(old_rx.slots(), old_left, "frames went to the old ring");
+        let queued = new_rx.slots();
+        assert!(queued > 0, "nothing reached the new ring");
+        assert_eq!(e.pushed_total - e.consumed(), queued as i64 / 2);
+        // 1.9 s left at 44.1 kHz is far more than the ring holds.
+        assert_eq!(queued, 44100 * 2 * 3 / 10);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn set_output_during_pending_transition_restarts_successor() {
+        let dir = crate::config::test_dir("engine-set-output-pending");
+        let [a, b] = ["a.wav", "b.wav"].map(|n| dir.join(n));
+        for p in [&a, &b] {
+            crate::library::scanner::tests::write_wav(p, 800);
+        }
+        let (mut e, events, _old_rx) = test_engine();
+        e.load(a, true);
+        prefetch_now(&mut e, b.clone());
+        e.fill();
+        assert_eq!(e.transitions.len(), 1);
+        events.try_iter().for_each(drop);
+
+        let (ring, _new_rx) = rtrb::RingBuffer::new(1024);
+        e.handle(Command::SetOutput { ring, rate: 44100 });
+        let evs: Vec<Event> = events.try_iter().collect();
+        assert!(matches!(evs.first(), Some(Event::Advanced(i)) if i.path == b), "{evs:?}");
+        assert!(e.transitions.is_empty());
+        assert_eq!(e.last_path.as_ref(), Some(&b));
+        assert_eq!(e.position(), Duration::ZERO);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn flush_returns_fast_when_device_lost() {
+        let (mut e, _events, _ring) = test_engine();
+        e.shared.device_lost.store(true, Ordering::Release);
+        // No callback runs, so the flag is never acknowledged.
+        let t0 = Instant::now();
+        e.flush();
+        assert!(t0.elapsed() < Duration::from_millis(5), "{:?}", t0.elapsed());
+        assert!(e.shared.flush.load(Ordering::Acquire));
     }
 
     #[test]
