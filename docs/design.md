@@ -1,4 +1,4 @@
-# Plan: `rmp` — Winamp-classic style music player in Rust (egui/eframe)
+# `rmp` design — Winamp-classic style music player in Rust (egui/eframe)
 
 ## Context
 

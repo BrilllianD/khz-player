@@ -1,6 +1,6 @@
 # rmp
 
-Winamp-classic style music player in Rust. Design: `PLAN.md`.
+Winamp-classic style music player in Rust. Design: `docs/design.md`.
 
 Before committing: `cargo test && cargo clippy --all-targets -- -D warnings`.
 
