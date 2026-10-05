@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- App icon: the kHz mark (dark variant) for the window, desktop file and app
+  launchers. Re-run the icon lines of the README install block to get it.
+  All variants live in `assets/icons/`.
+
 ## 0.1.4 — 2026-10-05
 
 - Renamed to khz-player. The binary, desktop file, Wayland app id and MPRIS
