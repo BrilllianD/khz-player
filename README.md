@@ -2,6 +2,8 @@
 
 A Winamp-classic style music player for Linux, written in Rust.
 
+![khz-player with the equalizer and playlist open](assets/screenshots/khz-player.png)
+
 - Main window with time display, scrolling title, spectrum analyzer, volume and balance.
 - 10-band equalizer with presets (built-in and your own) and AUTO mode, which
   remembers the preset chosen for each track.
