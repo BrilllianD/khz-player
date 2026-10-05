@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-10-05
 
 - App icon: the kHz mark (dark variant) for the window, desktop file and app
   launchers. Re-run the icon lines of the README install block to get it.
   All variants live in `assets/icons/`.
+- The title strip no longer shows the Omarchy theme name.
 
 ## 0.1.4 — 2026-10-05
 
