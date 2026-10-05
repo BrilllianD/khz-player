@@ -590,7 +590,7 @@ mod tests {
 
     #[test]
     fn resume_loads_paused_at_position() {
-        let dir = std::env::temp_dir().join(format!("rmp-resume-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("khz-resume-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("t.wav");
         crate::library::scanner::tests::write_wav(&path, 8000 * 4);
@@ -629,7 +629,7 @@ mod tests {
 
     #[test]
     fn idle_engine_wakes_on_commands_and_exits_on_disconnect() {
-        let dir = std::env::temp_dir().join(format!("rmp-idle-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("khz-idle-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("t.wav");
         crate::library::scanner::tests::write_wav(&path, 8000);
@@ -848,7 +848,7 @@ mod tests {
     #[test]
     fn load_failure_emits_load_failed() {
         let (mut e, events, _ring) = test_engine();
-        let path = PathBuf::from("/nonexistent/rmp-test.mp3");
+        let path = PathBuf::from("/nonexistent/khz-test.mp3");
         e.load(path.clone(), true);
         let evs: Vec<Event> = events.try_iter().collect();
         assert!(

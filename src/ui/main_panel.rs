@@ -34,7 +34,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         p.text(
             pos2(x0, title.center().y),
             Align2::LEFT_CENTER,
-            format!("{}  RMP", icons.music),
+            format!("{}  kHz", icons.music),
             FontId::monospace(12.0),
             theme.text_bright,
         );
@@ -307,7 +307,7 @@ fn title_button(ui: &mut Ui, rect: Rect, text: &str, theme: &crate::theme::Theme
 
 fn marquee_text(app: &App) -> String {
     let Some(t) = &app.now_track else {
-        return "rmp — drop files here or press L to open".into();
+        return "khz-player — drop files here or press L to open".into();
     };
     let idx = app
         .playlists

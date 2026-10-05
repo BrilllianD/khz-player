@@ -157,7 +157,7 @@ pub(crate) mod tests {
 
     #[test]
     fn incremental_rescan() {
-        let dir = std::env::temp_dir().join(format!("rmp-scan-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("khz-scan-{}", std::process::id()));
         let music = dir.join("music");
         std::fs::create_dir_all(music.join("sub")).unwrap();
         let db = dir.join("lib.db");

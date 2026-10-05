@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
-Name=rmp
+Name=khz-player
 GenericName=Music Player
 Comment=Winamp-classic style music player
-Exec=rmp %F
+Exec=khz-player %F
 Icon=multimedia-audio-player
 Terminal=false
 Categories=AudioVideo;Audio;Player;
 MimeType=audio/mpeg;audio/flac;audio/ogg;audio/mp4;audio/x-wav;audio/x-mpegurl;
-StartupWMClass=rmp
+StartupWMClass=khz-player

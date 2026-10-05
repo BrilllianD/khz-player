@@ -1,4 +1,4 @@
-# rmp
+# khz-player
 
 A Winamp-classic style music player for Linux, written in Rust.
 
@@ -23,19 +23,19 @@ cargo run --release -- [files | folders | playlist.m3u]...
 ```
 
 Arguments are added to the current playlist and the first one starts playing.
-Without arguments rmp loads the last track; if you quit mid-track, it waits
+Without arguments khz-player loads the last track; if you quit mid-track, it waits
 paused at the same spot.
 
 To install for your user:
 
 ```sh
 cargo install --path . --root ~/.local --locked
-install -Dm644 rmp.desktop ~/.local/share/applications/rmp.desktop
+install -Dm644 khz-player.desktop ~/.local/share/applications/khz-player.desktop
 update-desktop-database ~/.local/share/applications
 ```
 
 `--root ~/.local` puts the binary in `~/.local/bin`, which is on the PATH of an
-Omarchy session; `~/.cargo/bin` is not, so app launchers would not find `rmp`
+Omarchy session; `~/.cargo/bin` is not, so app launchers would not find `khz-player`
 there.
 
 ## Keyboard
@@ -75,45 +75,48 @@ duplicates by path or by tags), SEL, MISC (sort, reverse, randomize) and LIST
 
 | Path | Contents |
 | --- | --- |
-| `~/.config/rmp/config.toml` | Settings, window state, last track and position |
-| `~/.config/rmp/eq_presets.toml` | Your equalizer presets |
-| `~/.local/share/rmp/library.db` | Library, playlists, per-track AUTO presets |
+| `~/.config/khz-player/config.toml` | Settings, window state, last track and position |
+| `~/.config/khz-player/eq_presets.toml` | Your equalizer presets |
+| `~/.local/share/khz-player/library.db` | Library, playlists, per-track AUTO presets |
+
+A pre-rename `~/.config/rmp` or `~/.local/share/rmp` is moved to the new
+location automatically on first start.
 
 Useful keys in `config.toml`:
 
 - `library_roots`: folders to scan (defaults to your music folder).
-- `font_path`: font file to use. rmp looks for JetBrainsMono Nerd Font by
+- `font_path`: font file to use. khz-player looks for JetBrainsMono Nerd Font by
   default and uses its icons when found.
 
 ## Hyprland
 
-rmp draws its own title bar and is meant to float. With Omarchy's Lua config,
+khz-player draws its own title bar and is meant to float. With Omarchy's Lua config,
 add to `~/.config/hypr/looknfeel.lua`:
 
 ```lua
-o.window("^(rmp)$", { float = true, size = { 560, 760 } })
+o.window("^(khz-player)$", { float = true, size = { 560, 760 } })
 ```
 
 Without the Omarchy helper:
 
 ```lua
-hl.window_rule({ match = { class = "^(rmp)$" }, float = true, size = { 560, 760 } })
+hl.window_rule({ match = { class = "^(khz-player)$" }, float = true, size = { 560, 760 } })
 ```
 
 ## MPRIS
 
-rmp registers as `org.mpris.MediaPlayer2.rmp`.
+khz-player registers as `org.mpris.MediaPlayer2.khz-player`.
 
 ```sh
-playerctl -p rmp play-pause
-busctl --user call org.mpris.MediaPlayer2.rmp /org/mpris/MediaPlayer2 \
+playerctl -p khz-player play-pause
+busctl --user call org.mpris.MediaPlayer2.khz-player /org/mpris/MediaPlayer2 \
     org.mpris.MediaPlayer2.Player PlayPause
-busctl --user get-property org.mpris.MediaPlayer2.rmp /org/mpris/MediaPlayer2 \
+busctl --user get-property org.mpris.MediaPlayer2.khz-player /org/mpris/MediaPlayer2 \
     org.mpris.MediaPlayer2.Player Metadata
 ```
 
 ## Logging
 
 ```sh
-RUST_LOG=rmp=debug rmp
+RUST_LOG=khz_player=debug khz-player
 ```

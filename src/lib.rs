@@ -1,4 +1,4 @@
-//! rmp library crate: everything except the entry point, so benches can reach it.
+//! khz-player library crate: everything except the entry point, so benches can reach it.
 
 pub mod app;
 pub mod audio;

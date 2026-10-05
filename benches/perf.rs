@@ -4,13 +4,13 @@ use std::hint::black_box;
 use std::path::{Path, PathBuf};
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use rmp::audio::decoder::Decoder;
-use rmp::audio::dsp::{EqParams, Equalizer};
-use rmp::audio::resample::Resampler;
-use rmp::audio::spectrum::Spectrum;
-use rmp::library::Track;
-use rmp::theme::Theme;
-use rmp::ui::library_panel::{self, Cache};
+use khz_player::audio::decoder::Decoder;
+use khz_player::audio::dsp::{EqParams, Equalizer};
+use khz_player::audio::resample::Resampler;
+use khz_player::audio::spectrum::Spectrum;
+use khz_player::library::Track;
+use khz_player::theme::Theme;
+use khz_player::ui::library_panel::{self, Cache};
 
 const RATE: u32 = 48000;
 
@@ -107,7 +107,7 @@ fn write_wav(path: &Path, rate: u32, frames: usize) {
 }
 
 fn decode(c: &mut Criterion) {
-    let dir = std::env::temp_dir().join(format!("rmp-bench-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("khz-bench-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("10s.wav");
     write_wav(&path, 44100, 44100 * 10);

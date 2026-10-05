@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn aiff_opens_in_decoder() {
-        let dir = std::env::temp_dir().join(format!("rmp-aiff-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("khz-aiff-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("a.aiff");
         crate::library::scanner::tests::write_aiff(&path, 8000);

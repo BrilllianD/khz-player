@@ -1,8 +1,8 @@
-# `rmp` design — Winamp-classic style music player in Rust (egui/eframe)
+# `khz-player` design — Winamp-classic style music player in Rust (egui/eframe)
 
 ## Context
 
-User wants a desktop music player with playlists, a 10-band equalizer, and a compact Winamp classic / qmmp look with a dark theme that follows the Omarchy desktop theme. Target dir `/home/bronnikov/Projects/rmp` is empty (greenfield, not a git repo). Environment: Arch/Omarchy, Hyprland (Wayland), PipeWire 1.6.8 (pipewire-alsa + pipewire-pulse), Rust 1.98.1, ~1218 mp3/flac in `~/Music`, Nerd Fonts installed at `/usr/share/fonts/TTF/{JetBrainsMono,CaskaydiaMono}NerdFont-Regular.ttf`. Current Omarchy theme: osaka-jade, colors at `~/.local/state/omarchy/current/theme/colors.toml` (symlinked dir swapped on theme change).
+User wants a desktop music player with playlists, a 10-band equalizer, and a compact Winamp classic / qmmp look with a dark theme that follows the Omarchy desktop theme. Target dir `/home/bronnikov/Projects/khz-player` is empty (greenfield, not a git repo). Environment: Arch/Omarchy, Hyprland (Wayland), PipeWire 1.6.8 (pipewire-alsa + pipewire-pulse), Rust 1.98.1, ~1218 mp3/flac in `~/Music`, Nerd Fonts installed at `/usr/share/fonts/TTF/{JetBrainsMono,CaskaydiaMono}NerdFont-Regular.ttf`. Current Omarchy theme: osaka-jade, colors at `~/.local/state/omarchy/current/theme/colors.toml` (symlinked dir swapped on theme change).
 
 Decisions made with user:
 - Stack: Rust + egui/eframe (glow renderer).
@@ -15,7 +15,7 @@ Decisions made with user:
 
 ```toml
 [package]
-name = "rmp"
+name = "khz-player"
 edition = "2024"
 rust-version = "1.98"
 
@@ -56,7 +56,7 @@ Key choices: glow over wgpu (compile time, binary size); own audio engine (symph
 src/
   main.rs            tracing init, load config, spawn engine/mpris/theme-watcher, eframe::run_native
   app.rs             App (eframe::App): owns state, drains event channels, dispatches to ui/*
-  config.rs          Config (serde) load/save ~/.config/rmp/config.toml via `directories`
+  config.rs          Config (serde) load/save ~/.config/khz-player/config.toml via `directories`
   theme.rs           Theme struct, lenient Omarchy colors.toml parser, Winamp fallback, apply to egui Style
   theme_watch.rs     notify watcher on ~/.local/state/omarchy/current/ (parent dir, not symlink target), 250ms debounce
   fonts.rs           system Nerd Font path probe -> FontDefinitions; fallback egui bundled Hack
@@ -123,7 +123,7 @@ a0 = 1+α/A  a1 = -2cos(w0)   a2 = 1-α/A   (normalize by a0)
 ```
 Transposed DF2 per channel. Smoothing: every 64 frames `cur += (target-cur)*0.15`, recompute coeffs when `|Δ|>0.01`. Preamp linear, smoothed. Volume `v²`; balance `l = vol*min(1,1-bal)`, `r = vol*min(1,1+bal)`.
 
-Presets: XMMS/Audacious Winamp table (±20 scale) × 0.6 → ±12: Classical, Club, Dance, Full Bass, Full Bass & Treble, Full Treble, Laptop Speakers/Headphones, Large Hall, Live, Party, Pop, Reggae, Rock, Ska, Soft, Soft Rock, Techno (values as in agent table, e.g. Rock `8 4.8 -5.6 -8 -3.2 4 8.8 11.2 11.2 11.2`). User presets → `~/.config/rmp/eq_presets.toml` `[[preset]] name, preamp, bands=[..10]`.
+Presets: XMMS/Audacious Winamp table (±20 scale) × 0.6 → ±12: Classical, Club, Dance, Full Bass, Full Bass & Treble, Full Treble, Laptop Speakers/Headphones, Large Hall, Live, Party, Pop, Reggae, Rock, Ska, Soft, Soft Rock, Techno (values as in agent table, e.g. Rock `8 4.8 -5.6 -8 -3.2 4 8.8 11.2 11.2 11.2`). User presets → `~/.config/khz-player/eq_presets.toml` `[[preset]] name, preamp, bands=[..10]`.
 
 ### Spectrum (`audio/spectrum.rs`, UI thread)
 Drain tap into rolling 2048-sample buffer; Hann; realfft; 20 log bands 50 Hz–16 kHz (`f_k = 50*(320)^(k/20)`), max magnitude per band; dB `[-60,0] → [0,1]`; divide by `vol_lin` (floor 0.05) before dB; fall 0.08/frame, peak hold 15 frames then 0.02/frame; `request_repaint_after(1/animation_fps)` while playing (default 30).
@@ -132,7 +132,7 @@ Drain tap into rolling 2048-sample buffer; Hann; realfft; 20 log bands 50 Hz–1
 
 ```
 Main 560×232 (always)
-  title strip 560×20 "RMP" + [_][x]; drag -> ViewportCommand::StartDrag, close -> Close
+  title strip 560×20 "kHz" + [_][x]; drag -> ViewportCommand::StartDrag, close -> Close
   [digits 180×60 "-02:34"] [marquee 340×20 title]
                            [spectrum 340×60, 20 bars]
   [kbps][kHz] [mono/stereo LED]  vol 220  bal 100
@@ -143,7 +143,7 @@ Playlist 560×fill min 200 (toggle Alt+E / PL): tabs [Default][Rock][+]; ScrollA
   "1. Artist - Title   3:45"; [ADD v][REM v][SEL v][MISC v][LIST v]  total
 Library SidePanel::right 420 (Alt+L): search, rescan + ProgressBar, Artist > Album > Track tree
 ```
-Viewport: `with_inner_size([560,760]).with_min_inner_size([560,232]).with_decorations(false).with_app_id("rmp")`. Resize on panel toggle via `ViewportCommand::InnerSize` (floating only). Layout fluid so tiled also works. Document Hyprland float rule for user.
+Viewport: `with_inner_size([560,760]).with_min_inner_size([560,232]).with_decorations(false).with_app_id("khz-player")`. Resize on panel toggle via `ViewportCommand::InnerSize` (floating only). Layout fluid so tiled also works. Document Hyprland float rule for user.
 
 Stock egui: Slider (seek/vol/bal/`Slider::vertical()` EQ), Button, SelectableLabel, ComboBox, ScrollArea, CollapsingHeader, TextEdit, menu_button, ProgressBar. Custom paint via `allocate_painter`: digits (monospace 40pt), marquee (clipped galley, 40 px/s), spectrum bars (gradient lo→hi, 2px peak line), LED toggles. Style: `Visuals::dark()` + overrides, `CornerRadius::ZERO`, tight spacing → flat Winamp look.
 
@@ -163,7 +163,7 @@ Z prev, X play, C pause, V stop, B next, Space toggle, L focus open-path field, 
 
 ## Persistence
 
-SQLite `~/.local/share/rmp/library.db`, WAL, `user_version` migrations:
+SQLite `~/.local/share/khz-player/library.db`, WAL, `user_version` migrations:
 ```sql
 CREATE TABLE tracks (path TEXT PRIMARY KEY, mtime INTEGER NOT NULL, size INTEGER NOT NULL,
   title TEXT, artist TEXT, album TEXT, album_artist TEXT, track_no INTEGER, disc_no INTEGER,
@@ -177,7 +177,7 @@ CREATE TABLE eq_auto (path TEXT PRIMARY KEY, preset TEXT NOT NULL);
 ```
 Scanner: clear `seen`, set per visit, delete `seen=0`. Playlist item metadata resolved from `tracks` by path, else lofty on demand.
 
-`~/.config/rmp/config.toml`: version, library_roots, font_path, volume, balance, shuffle, repeat (off|all|one), last_playlist, last_track_index, show_eq/show_playlist/show_library, time_remaining, animation_fps (10-60, default 30), `[eq] enabled, auto, preamp, bands[10], preset`, `[window] x y w h`. Save debounced 1 s + on exit.
+`~/.config/khz-player/config.toml`: version, library_roots, font_path, volume, balance, shuffle, repeat (off|all|one), last_playlist, last_track_index, show_eq/show_playlist/show_library, time_remaining, animation_fps (10-60, default 30), `[eq] enabled, auto, preamp, bands[10], preset`, `[window] x y w h`. Save debounced 1 s + on exit.
 
 ## Phases (each ends runnable)
 
@@ -192,19 +192,19 @@ Scanner: clear `seen`, set per visit, delete `seen=0`. Playlist item metadata re
 
 ## Verification
 
-- P1: `cargo run` opens window on Hyprland with Nerd Font and osaka-jade colors; switch theme via Omarchy theme menu → recolors in ~0.3 s without restart; temporarily break `colors.toml` → green Winamp fallback. `RUST_LOG=rmp=debug`.
+- P1: `cargo run` opens window on Hyprland with Nerd Font and osaka-jade colors; switch theme via Omarchy theme menu → recolors in ~0.3 s without restart; temporarily break `colors.toml` → green Winamp fallback. `RUST_LOG=khz_player=debug`.
 - P2: `cargo run -- "$HOME/Music/Nero - Satisfy.mp3"` plays; seek lands within ~0.1 s, no click; pause/resume exact; flac + m4a play; pitch matches `mpv` (resampler 44.1k→48k correct); `pw-top` shows stream.
 - P3: drop a dir from file manager → tracks appear (if Wayland DnD fails in winit, fall back to typed path / library add; note it); dbl-click plays; B/Z navigate; two album tracks back-to-back without gap; export M3U, restart, playlist restored; `mpv --playlist=x.m3u` reads it.
 - P4: toggle ON audible; fast slider drags no clicks; Full Bass obviously bassy; save user preset, restart, present; preamp -12 quieter.
 - P5: bars move, fall smoothly, peaks hold; stop → decay to zero; CPU < 5% while playing.
-- P6: first scan of ~1218 files finishes in seconds with progress; `sqlite3 ~/.local/share/rmp/library.db 'select count(*) from tracks'`; touch one mp3 → rescan updates only it; delete file → row gone; search filters live.
-- P7: `busctl --user list | grep mpris` shows `org.mpris.MediaPlayer2.rmp`; `busctl --user call ... PlayPause`; install `playerctl` (`sudo pacman -S playerctl`) → `playerctl -p rmp status|metadata|next`; waybar mpris + media keys work.
+- P6: first scan of ~1218 files finishes in seconds with progress; `sqlite3 ~/.local/share/khz-player/library.db 'select count(*) from tracks'`; touch one mp3 → rescan updates only it; delete file → row gone; search filters live.
+- P7: `busctl --user list | grep mpris` shows `org.mpris.MediaPlayer2.khz-player`; `busctl --user call ... PlayPause`; install `playerctl` (`sudo pacman -S playerctl`) → `playerctl -p khz-player status|metadata|next`; waybar mpris + media keys work.
 - P8: `cargo clippy -- -D warnings`, `cargo build --release`.
 
 ## Risks / gotchas
 
 - Wayland drag-and-drop in winit may be unsupported on Hyprland; don't block on it.
-- Hyprland tiling ignores `InnerSize`; document float rule `^(rmp)$`.
+- Hyprland tiling ignores `InnerSize`; document float rule `^(khz-player)$`.
 - cpal 0.18 and symphonia 0.6 have breaking API changes vs older examples; verify against `cargo doc`.
 - Realtime callback: no Mutex/alloc/logging; flush must happen in callback, not engine.
 - `mpris-server` Player is `!Send` → dedicated thread; 0.10 docs.rs build failed, pin 0.9 if needed.

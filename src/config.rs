@@ -49,7 +49,7 @@ pub struct Config {
     pub repeat: Repeat,
     pub last_playlist: Option<String>,
     pub last_track_index: Option<usize>,
-    /// Position in the last track when rmp quit while playing or paused.
+    /// Position in the last track when khz-player quit while playing or paused.
     pub last_position_ms: Option<u64>,
     pub show_eq: bool,
     pub show_playlist: bool,
@@ -89,19 +89,45 @@ impl Default for Config {
 }
 
 pub fn project_dirs() -> Option<directories::ProjectDirs> {
-    directories::ProjectDirs::from("", "", "rmp")
+    directories::ProjectDirs::from("", "", "khz-player")
+}
+
+/// One-time move of the pre-rename `rmp` config and data directories to
+/// their `khz-player` locations. A directory is only moved when the new one
+/// does not exist yet, so a fresh install or an already migrated setup is
+/// untouched.
+pub fn migrate_legacy_dirs() {
+    let Some(new) = project_dirs() else { return };
+    let Some(old) = directories::ProjectDirs::from("", "", "rmp") else {
+        return;
+    };
+    for (from, to) in [
+        (old.config_dir(), new.config_dir()),
+        (old.data_dir(), new.data_dir()),
+    ] {
+        if !from.is_dir() || to.exists() {
+            continue;
+        }
+        if let Some(parent) = to.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match std::fs::rename(from, to) {
+            Ok(()) => tracing::info!("moved {} to {}", from.display(), to.display()),
+            Err(e) => tracing::warn!("could not move {} to {}: {e}", from.display(), to.display()),
+        }
+    }
 }
 
 pub fn config_dir() -> PathBuf {
     project_dirs()
         .map(|d| d.config_dir().to_path_buf())
-        .unwrap_or_else(|| PathBuf::from(".rmp"))
+        .unwrap_or_else(|| PathBuf::from(".khz-player"))
 }
 
 pub fn data_dir() -> PathBuf {
     project_dirs()
         .map(|d| d.data_dir().to_path_buf())
-        .unwrap_or_else(|| PathBuf::from(".rmp"))
+        .unwrap_or_else(|| PathBuf::from(".khz-player"))
 }
 
 impl Config {
@@ -182,7 +208,7 @@ pub fn write_atomic(path: &Path, text: &str) -> anyhow::Result<()> {
 /// A fresh empty directory for tests.
 #[cfg(test)]
 pub fn test_dir(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("rmp-test-{}-{name}", std::process::id()));
+    let d = std::env::temp_dir().join(format!("khz-test-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d

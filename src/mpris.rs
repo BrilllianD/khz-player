@@ -69,7 +69,7 @@ fn loop_status(r: Repeat) -> LoopStatus {
 }
 
 fn track_id(id: u64) -> TrackId {
-    TrackId::try_from(format!("/org/rmp/track/{id}")).unwrap_or(TrackId::NO_TRACK)
+    TrackId::try_from(format!("/org/khz_player/track/{id}")).unwrap_or(TrackId::NO_TRACK)
 }
 
 pub fn start(repaint: egui::Context) -> Mpris {
@@ -96,9 +96,9 @@ async fn serve(
     actions: Sender<MprisAction>,
     repaint: egui::Context,
 ) -> mpris_server::zbus::Result<()> {
-    let player = Player::builder("rmp")
-        .identity("rmp")
-        .desktop_entry("rmp")
+    let player = Player::builder("khz-player")
+        .identity("khz-player")
+        .desktop_entry("khz-player")
         .can_play(true)
         .can_pause(true)
         .can_go_next(true)

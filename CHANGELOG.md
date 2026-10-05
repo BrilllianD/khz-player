@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Renamed to khz-player. The binary, desktop file, Wayland app id and MPRIS
+  name (`org.mpris.MediaPlayer2.khz-player`) follow the new name; update any
+  Hyprland float rule from `^(rmp)$` to `^(khz-player)$`.
+- Existing `~/.config/rmp` and `~/.local/share/rmp` are moved to
+  `~/.config/khz-player` and `~/.local/share/khz-player` on first start.
+
 ## 0.1.3 — 2026-10-05
 
 Audio fixes.

@@ -248,7 +248,7 @@ impl App {
             }
         } else if let Some(t) = app.playlists[active].current_track() {
             // Restore the last track without starting playback; paused at the
-            // old position if rmp quit mid-track.
+            // old position if khz-player quit mid-track.
             let path = t.path.clone();
             app.audio.send(match app.cfg.last_position_ms {
                 Some(ms) => Command::Resume { path, at: Duration::from_millis(ms) },
@@ -847,8 +847,8 @@ impl App {
     /// Window title follows the current track, like Winamp's "Artist - Title - Winamp".
     fn sync_title(&self) {
         let title = match &self.now_track {
-            Some(t) => format!("{} - rmp", t.display_name()),
-            None => "rmp".into(),
+            Some(t) => format!("{} - khz-player", t.display_name()),
+            None => "khz-player".into(),
         };
         self.ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
     }

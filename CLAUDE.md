@@ -1,4 +1,4 @@
-# rmp
+# khz-player
 
 Winamp-classic style music player in Rust. Design: `docs/design.md`.
 
