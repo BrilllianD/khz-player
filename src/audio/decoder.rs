@@ -111,7 +111,14 @@ impl Decoder {
             let packet = match self.reader.next_packet() {
                 Ok(Some(p)) => p,
                 Ok(None) => return Ok(false),
-                Err(Error::ResetRequired) => return Ok(false),
+                // Chained Ogg: a new physical stream starts with its own
+                // track list and possibly another rate or channel count.
+                Err(Error::ResetRequired) => {
+                    if self.reset_track()? {
+                        continue;
+                    }
+                    return Ok(false);
+                }
                 Err(Error::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                     return Ok(false);
                 }
@@ -154,6 +161,37 @@ impl Decoder {
             mix_to_stereo(&self.tmp[skip * ch..frames * ch], ch, out);
             return Ok(true);
         }
+    }
+
+    /// Re-selects the audio track after `ResetRequired` and rebuilds the
+    /// codec for its parameters. Returns `Ok(false)` when no audio track is
+    /// left. `info.duration` keeps describing the first stream.
+    fn reset_track(&mut self) -> anyhow::Result<bool> {
+        let Some(track) = self.reader.default_track(TrackType::Audio) else {
+            return Ok(false);
+        };
+        let Some(params) = track.codec_params.as_ref().and_then(|p| p.audio()) else {
+            return Ok(false);
+        };
+        self.decoder = symphonia::default::get_codecs()
+            .make_audio_decoder(params, &AudioDecoderOptions::default())
+            .map_err(|e| anyhow!("unsupported codec: {e}"))?;
+        self.track_id = track.id;
+        self.time_base = track.time_base;
+        if let Some(rate) = params.sample_rate {
+            self.info.sample_rate = rate;
+        }
+        if let Some(ch) = &params.channels {
+            self.info.channels = ch.count();
+        }
+        self.skip_until = None;
+        tracing::debug!(
+            "{}: new stream, {} Hz, {} ch",
+            self.info.path.display(),
+            self.info.sample_rate,
+            self.info.channels
+        );
+        Ok(true)
     }
 
     /// Seeks to `pos`; returns the position actually reached.

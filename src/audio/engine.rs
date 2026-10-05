@@ -25,6 +25,14 @@ struct Current {
     resampler: Resampler,
 }
 
+/// Replaces the resampler with one for the decoder's current rate and
+/// `out_rate`. Buffered input of the old one is dropped; call `finish` first
+/// to keep it.
+fn rebuild_resampler(cur: &mut Current, out_rate: u32) -> anyhow::Result<()> {
+    cur.resampler = Resampler::new(cur.decoder.info.sample_rate, out_rate)?;
+    Ok(())
+}
+
 struct Engine {
     events: Sender<Event>,
     shared: Arc<Shared>,
@@ -412,6 +420,19 @@ impl Engine {
             self.scratch.clear();
             match cur.decoder.next_frames(&mut self.scratch) {
                 Ok(true) => {
+                    // Chained streams may change rate mid-track: flush the
+                    // old rate's tail, then resample the rest at the new rate.
+                    if cur.decoder.info.sample_rate != cur.resampler.in_rate() {
+                        let rebuilt = cur
+                            .resampler
+                            .finish(&mut self.buf)
+                            .and_then(|()| rebuild_resampler(cur, self.out_rate));
+                        if let Err(e) = rebuilt {
+                            tracing::warn!("resampler rebuild: {e:#}");
+                            self.eof = true;
+                            continue;
+                        }
+                    }
                     if let Err(e) = cur.resampler.process(&self.scratch, &mut self.buf) {
                         tracing::warn!("resampler: {e:#}");
                         self.eof = true;
@@ -722,6 +743,57 @@ mod tests {
             "{evs:?}"
         );
         assert_eq!(e.state, PlayerState::Stopped);
+    }
+
+    /// Needs a chained Ogg of two or more streams, ideally at different rates
+    /// (`cat a.ogg b.ogg > chained.ogg`):
+    /// `RMP_TEST_CHAINED_OGG=/path/chained.ogg cargo test chained_ogg -- --ignored`.
+    #[test]
+    #[ignore]
+    fn chained_ogg_real_file() {
+        let path =
+            PathBuf::from(std::env::var("RMP_TEST_CHAINED_OGG").expect("RMP_TEST_CHAINED_OGG"));
+        // The decoder runs through every stream; record (rate, frames) runs.
+        let mut d = Decoder::open(&path).unwrap();
+        let first = d.info.duration.expect("duration").as_secs_f64();
+        let mut runs: Vec<(u32, u64)> = Vec::new();
+        let mut frames = Vec::new();
+        loop {
+            frames.clear();
+            if !d.next_frames(&mut frames).unwrap() {
+                break;
+            }
+            let (rate, n) = (d.info.sample_rate, frames.len() as u64 / 2);
+            match runs.last_mut() {
+                Some((r, f)) if *r == rate => *f += n,
+                _ => runs.push((rate, n)),
+            }
+        }
+        let secs: f64 = runs.iter().map(|&(r, f)| f as f64 / r as f64).sum();
+        println!("first stream {first:.3} s, decoded {secs:.3} s, runs {runs:?}");
+        assert!(secs > first + 0.5, "stopped after the first stream");
+
+        // The engine resamples each run to the output rate without losing frames.
+        let (mut e, _events, mut ring) = test_engine();
+        e.load(path, true);
+        loop {
+            e.fill();
+            while ring.pop().is_ok() {}
+            if e.eof && e.buf.is_empty() {
+                break;
+            }
+        }
+        let out = e.out_rate as f64;
+        let expected: f64 = runs
+            .iter()
+            .map(|&(r, f)| (f as f64 * out / r as f64).round())
+            .sum();
+        let slack = 2 * runs.len() as i64;
+        assert!(
+            (e.pushed_total - expected as i64).abs() <= slack,
+            "pushed {} frames, expected {expected}",
+            e.pushed_total
+        );
     }
 
     /// Needs a real file: `RMP_TEST_FILE=/path/song.mp3 cargo test engine_real -- --ignored`.

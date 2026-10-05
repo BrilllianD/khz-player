@@ -8,6 +8,7 @@ const CH: usize = 2;
 const CHUNK: usize = 1024;
 
 pub struct Resampler {
+    in_rate: u32,
     inner: Option<Inner>,
 }
 
@@ -25,7 +26,10 @@ struct Inner {
 impl Resampler {
     pub fn new(in_rate: u32, out_rate: u32) -> anyhow::Result<Self> {
         if in_rate == out_rate {
-            return Ok(Self { inner: None });
+            return Ok(Self {
+                in_rate,
+                inner: None,
+            });
         }
         let rs = Fft::<f32>::new(
             in_rate as usize,
@@ -37,6 +41,7 @@ impl Resampler {
         let chunk_out = vec![0.0; rs.output_frames_max() * CH];
         let to_drop = rs.output_delay();
         Ok(Self {
+            in_rate,
             inner: Some(Inner {
                 ratio: out_rate as f64 / in_rate as f64,
                 rs,
@@ -47,6 +52,11 @@ impl Resampler {
                 out_total: 0,
             }),
         })
+    }
+
+    /// Input rate this resampler was built for.
+    pub fn in_rate(&self) -> u32 {
+        self.in_rate
     }
 
     #[cfg(test)]
@@ -175,5 +185,26 @@ mod tests {
             .count();
         let expected = 2.0 * freq * (mid.len() as f32 / 48000.0);
         assert!((crossings as f32 - expected).abs() < 4.0, "{crossings} vs {expected}");
+    }
+
+    /// A mid-stream rate change: the old resampler flushes its tail, a new
+    /// one takes over. Together they emit exactly each part's length.
+    #[test]
+    fn rate_switch_keeps_length() {
+        let mut out = Vec::new();
+        let mut r = Resampler::new(44100, 48000).unwrap();
+        assert_eq!(r.in_rate(), 44100);
+        for piece in vec![0.25f32; 44100 * 2].chunks(1152 * 2) {
+            r.process(piece, &mut out).unwrap();
+        }
+        r.finish(&mut out).unwrap();
+        let mut r = Resampler::new(32000, 48000).unwrap();
+        assert_eq!(r.in_rate(), 32000);
+        for piece in vec![0.25f32; 32000 * 2].chunks(1152 * 2) {
+            r.process(piece, &mut out).unwrap();
+        }
+        r.finish(&mut out).unwrap();
+        let frames = out.len() as i64 / 2;
+        assert!((frames - 96000).abs() <= 2, "{frames}");
     }
 }
