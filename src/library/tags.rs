@@ -8,8 +8,10 @@ use lofty::probe::Probe;
 
 use super::Track;
 
+/// Extensions the scanner picks up. Every one must decode with the symphonia
+/// features enabled in `Cargo.toml`; Opus, WavPack, APE and Musepack do not.
 pub const AUDIO_EXTENSIONS: &[&str] = &[
-    "mp3", "flac", "ogg", "oga", "opus", "m4a", "mp4", "aac", "wav", "wv", "ape", "mpc",
+    "mp3", "mp2", "mp1", "flac", "ogg", "oga", "m4a", "mp4", "aac", "wav", "aif", "aiff", "aifc",
 ];
 
 pub fn is_audio(path: &Path) -> bool {
@@ -118,11 +120,41 @@ pub fn read(path: &Path) -> Track {
     t
 }
 
-
-
 #[cfg(test)]
 mod tests {
-    use super::{fix_cp1251, is_lost};
+    use super::{AUDIO_EXTENSIONS, fix_cp1251, is_audio, is_lost};
+    use std::path::Path;
+
+    #[test]
+    fn is_audio_matches_decodable_set() {
+        // Containers and codecs covered by the enabled symphonia features.
+        const DECODABLE: &[&str] = &[
+            "mp3", "mp2", "mp1", "flac", "ogg", "oga", "m4a", "mp4", "aac", "wav", "aif", "aiff",
+            "aifc",
+        ];
+        for ext in AUDIO_EXTENSIONS {
+            assert!(DECODABLE.contains(ext), "{ext} listed but not decodable");
+        }
+        for ext in ["opus", "wv", "ape", "mpc", "txt"] {
+            assert!(!is_audio(Path::new(&format!("a.{ext}"))), "{ext}");
+        }
+        assert!(is_audio(Path::new("a.AIFF")));
+    }
+
+    #[test]
+    fn aiff_opens_in_decoder() {
+        let dir = std::env::temp_dir().join(format!("rmp-aiff-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.aiff");
+        crate::library::scanner::tests::write_aiff(&path, 8000);
+        let mut d = crate::audio::decoder::Decoder::open(&path).unwrap();
+        assert_eq!(d.info.sample_rate, 8000);
+        assert_eq!(d.info.channels, 1);
+        let mut out = Vec::new();
+        assert!(d.next_frames(&mut out).unwrap());
+        assert!(!out.is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn cp1251_mojibake_is_repaired() {

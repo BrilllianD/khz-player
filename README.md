@@ -7,7 +7,8 @@ A Winamp-classic style music player for Linux, written in Rust.
   remembers the preset chosen for each track.
 - Several playlists, stored in SQLite; M3U import and export.
 - Media library scanned from your music folders, with a search box.
-- Gapless playback; MP3, FLAC, Ogg Vorbis, AAC/M4A and WAV.
+- Gapless playback; MP3 (and MP1/MP2), FLAC, Ogg Vorbis, AAC and ALAC in
+  M4A/MP4, WAV and AIFF. Opus, WavPack, APE and Musepack are not supported.
 - MPRIS, so media keys and desktop widgets can control it.
 - Uses the current Omarchy theme colors and follows theme switches;
   falls back to the classic Winamp palette elsewhere.

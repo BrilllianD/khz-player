@@ -116,6 +116,29 @@ pub(crate) mod tests {
         std::fs::write(path, b).unwrap();
     }
 
+    /// Silent 8 kHz mono 16-bit AIFF (big-endian, 54-byte header).
+    pub(crate) fn write_aiff(path: &std::path::Path, frames: u32) {
+        let rate: u32 = 8000;
+        let data_len = frames * 2;
+        let mut b = Vec::new();
+        b.extend_from_slice(b"FORM");
+        b.extend_from_slice(&(46 + data_len).to_be_bytes());
+        b.extend_from_slice(b"AIFFCOMM");
+        b.extend_from_slice(&18u32.to_be_bytes());
+        b.extend_from_slice(&1u16.to_be_bytes()); // mono
+        b.extend_from_slice(&frames.to_be_bytes());
+        b.extend_from_slice(&16u16.to_be_bytes());
+        // Sample rate as an 80-bit IEEE extended float.
+        let e = 31 - rate.leading_zeros();
+        b.extend_from_slice(&(16383 + e as u16).to_be_bytes());
+        b.extend_from_slice(&((rate as u64) << (63 - e)).to_be_bytes());
+        b.extend_from_slice(b"SSND");
+        b.extend_from_slice(&(8 + data_len).to_be_bytes());
+        b.extend_from_slice(&[0; 8]); // offset, block size
+        b.resize(b.len() + data_len as usize, 0);
+        std::fs::write(path, b).unwrap();
+    }
+
     fn run(root: &std::path::Path, db: &std::path::Path) -> (usize, usize, usize) {
         match scan(&[root.to_path_buf()], db, &|_| {}).unwrap() {
             ScanEvent::Done {
