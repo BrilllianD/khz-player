@@ -218,6 +218,30 @@ pub fn channel_gains(volume: f32, balance: f32) -> (f32, f32) {
     (v * (1.0 - b).min(1.0), v * (1.0 + b).min(1.0))
 }
 
+/// Moves `cur` toward `target` by at most `step`, landing exactly on `target`.
+pub fn approach(cur: f32, target: f32, step: f32) -> f32 {
+    if cur < target {
+        (cur + step).min(target)
+    } else {
+        (cur - step).max(target)
+    }
+}
+
+/// Level above which `soft_clip` starts bending the signal.
+const CLIP_KNEE: f32 = 0.9;
+
+/// Identity up to the knee, then a tanh curve that approaches 1.0. Continuous,
+/// monotonic and bounded by 1.0, so overs from EQ boost round off instead of
+/// cracking against a hard clamp.
+pub fn soft_clip(x: f32) -> f32 {
+    let a = x.abs();
+    if a <= CLIP_KNEE {
+        return x;
+    }
+    let room = 1.0 - CLIP_KNEE;
+    (CLIP_KNEE + room * ((a - CLIP_KNEE) / room).tanh()).copysign(x)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,5 +332,39 @@ mod tests {
         assert_eq!(channel_gains(0.5, 0.0), (0.25, 0.25));
         assert_eq!(channel_gains(1.0, 1.0), (0.0, 1.0));
         assert_eq!(channel_gains(1.0, -0.5), (1.0, 0.5));
+    }
+
+    #[test]
+    fn soft_clip_identity_below_knee_bounded_above() {
+        let mut prev = f32::NEG_INFINITY;
+        for i in -3000..=3000 {
+            let x = i as f32 / 1000.0;
+            let y = soft_clip(x);
+            if x.abs() <= CLIP_KNEE {
+                assert_eq!(y, x);
+            }
+            assert!(y.abs() <= 1.0, "soft_clip({x}) = {y}");
+            assert!(y >= prev, "not monotonic at {x}: {prev} -> {y}");
+            assert_eq!(y.signum(), x.signum());
+            prev = y;
+        }
+        assert!(soft_clip(1.0) < 1.0);
+        assert!(soft_clip(1.0) > CLIP_KNEE);
+        // Continuous at the knee.
+        assert!((soft_clip(CLIP_KNEE + 1e-4) - CLIP_KNEE).abs() < 2e-4);
+    }
+
+    #[test]
+    fn approach_reaches_target() {
+        let mut g = 0.0;
+        for _ in 0..7 {
+            g = approach(g, 1.0, 0.125);
+            assert!(g < 1.0);
+        }
+        assert_eq!(approach(g, 1.0, 0.125), 1.0);
+        assert_eq!(approach(1.0, 1.0, 0.125), 1.0);
+        assert_eq!(approach(1.0, 0.25, 0.5), 0.5);
+        assert_eq!(approach(0.5, 0.25, 0.5), 0.25);
+        assert_eq!(approach(0.3, 0.3, 0.0), 0.3);
     }
 }
