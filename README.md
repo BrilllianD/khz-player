@@ -31,10 +31,13 @@ To install for your user:
 ```sh
 cargo install --path . --root ~/.local --locked
 install -Dm644 khz-player.desktop ~/.local/share/applications/khz-player.desktop
-for s in 16 24 32 48 64 128 256 512; do
+for s in 16 24 32; do
+  install -Dm644 assets/icons/dark-small/png/khz-icon-dark-small-$s.png ~/.local/share/icons/hicolor/${s}x${s}/apps/khz-player.png
+done
+for s in 48 64 128 256 512; do
   install -Dm644 assets/icons/dark/png/khz-icon-dark-$s.png ~/.local/share/icons/hicolor/${s}x${s}/apps/khz-player.png
 done
-install -Dm644 assets/icons/dark/khz-icon-dark.svg ~/.local/share/icons/hicolor/scalable/apps/khz-player.svg
+install -Dm644 assets/icons/dark-small/khz-icon-dark-small.svg ~/.local/share/icons/hicolor/scalable/apps/khz-player.svg
 update-desktop-database ~/.local/share/applications
 ```
 

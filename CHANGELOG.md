@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Sharper app icon at small sizes, such as the 18 px icons in the Omarchy
+  menu: a pixel-aligned `kHz` with bigger letters and no glow. Re-run the
+  icon lines of the README install block to get it.
+
 ## 0.2.0 — 2026-10-05
 
 - App icon: the kHz mark (dark variant) for the window, desktop file and app
