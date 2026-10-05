@@ -39,6 +39,8 @@ pub struct Shared {
     pub eq_bands: [AtomicF32; BANDS],
     /// Number of frames in the spectrum tap that were dropped (diagnostics only).
     pub tap_overflow: AtomicU64,
+    /// Buffer underruns/overruns reported by the stream; the engine logs the count.
+    pub xruns: AtomicU64,
 }
 
 impl Shared {
@@ -55,6 +57,7 @@ impl Shared {
             eq_preamp: AtomicF32::new(0.0),
             eq_bands: Default::default(),
             tap_overflow: AtomicU64::new(0),
+            xruns: AtomicU64::new(0),
         }
     }
 

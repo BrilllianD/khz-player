@@ -87,6 +87,15 @@ impl Biquad {
         self.z2[ch] = c.b2 * x - c.a2 * y;
         y
     }
+
+    /// Zeroes state that decayed toward the subnormal range.
+    fn flush_tiny(&mut self) {
+        for z in self.z1.iter_mut().chain(self.z2.iter_mut()) {
+            if z.abs() < 1e-30 {
+                *z = 0.0;
+            }
+        }
+    }
 }
 
 /// Target parameters, written by the UI through atomics and copied in each callback.
@@ -191,6 +200,13 @@ impl Equalizer {
                 *s = x as f32;
             }
         }
+        // In silence the state decays into subnormals, where every multiply
+        // costs ~100x on x86 exactly when the CPU should idle. Once per block.
+        for (f, &db) in self.filters.iter_mut().zip(&self.cur_db) {
+            if db != 0.0 {
+                f.flush_tiny();
+            }
+        }
     }
 }
 
@@ -255,6 +271,35 @@ mod tests {
         assert!(buf.iter().all(|s| s.is_finite()));
         assert!((eq.cur_db[0] - 12.0).abs() < 1e-6);
         assert!((eq.cur_preamp_db + 6.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn eq_state_flushes_to_zero_in_silence() {
+        let mut eq = Equalizer::new(48000.0);
+        let p = EqParams {
+            enabled: true,
+            preamp_db: 0.0,
+            bands_db: [12.0; BANDS],
+        };
+        let mut buf = vec![0.0f32; 24000 * 2];
+        for (i, s) in buf.iter_mut().enumerate() {
+            *s = ((i / 2) as f32 * 0.05).sin() * 0.5;
+        }
+        eq.process(&mut buf, &p);
+        let state = |eq: &Equalizer| -> Vec<f64> {
+            eq.filters
+                .iter()
+                .flat_map(|f| f.z1.into_iter().chain(f.z2))
+                .collect()
+        };
+        assert!(state(&eq).iter().any(|&z| z != 0.0));
+        let mut block = vec![0.0f32; 1024 * 2];
+        for _ in 0..(48000 * 10 / 1024) {
+            block.fill(0.0);
+            eq.process(&mut block, &p);
+        }
+        assert!(eq.cur_db.iter().all(|&g| g == 12.0));
+        assert!(state(&eq).iter().all(|&z| z == 0.0), "{:?}", state(&eq));
     }
 
     #[test]

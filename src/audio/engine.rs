@@ -15,6 +15,7 @@ use crate::audio::{Command, Event, PlayerState};
 
 const IDLE_WAIT: Duration = Duration::from_millis(5);
 const FLUSH_TIMEOUT: Duration = Duration::from_millis(100);
+const XRUN_LOG_INTERVAL: Duration = Duration::from_secs(10);
 
 struct Current {
     decoder: Decoder,
@@ -42,6 +43,9 @@ struct Engine {
     transitions: VecDeque<(i64, TrackInfo)>,
     /// Current decoder hit end of stream and nothing follows.
     eof: bool,
+    /// Xrun count at the last log line, and when it was written.
+    last_xruns: u64,
+    last_xrun_log: Instant,
 }
 
 pub fn run(
@@ -68,6 +72,8 @@ pub fn run(
         pushed_total: 0,
         transitions: VecDeque::new(),
         eof: false,
+        last_xruns: 0,
+        last_xrun_log: Instant::now(),
     };
     loop {
         // Only playback (or a gapless mark still to cross) needs ticks; otherwise
@@ -383,7 +389,21 @@ impl Engine {
         }
     }
 
+    /// Logs the xrun count at most every `XRUN_LOG_INTERVAL`, when it moved.
+    fn log_xruns(&mut self) {
+        if self.last_xrun_log.elapsed() < XRUN_LOG_INTERVAL {
+            return;
+        }
+        let n = self.shared.xruns.load(Ordering::Relaxed);
+        if n != self.last_xruns {
+            tracing::debug!("{} xruns ({n} total)", n - self.last_xruns);
+            self.last_xruns = n;
+        }
+        self.last_xrun_log = Instant::now();
+    }
+
     fn check_progress(&mut self) {
+        self.log_xruns();
         let consumed = self.consumed();
         while let Some(&(mark, _)) = self.transitions.front() {
             if consumed < mark {
@@ -538,6 +558,8 @@ mod tests {
             pushed_total: 0,
             transitions: VecDeque::new(),
             eof: false,
+            last_xruns: 0,
+            last_xrun_log: Instant::now(),
         };
         (e, ev_rx, ring_rx)
     }

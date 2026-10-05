@@ -128,10 +128,18 @@ where
     )?);
     let mut st = state.take().expect("callback state");
     st.channels = config.channels.max(1) as usize;
+    let shared = st.shared.clone();
     device.build_output_stream::<T, _, _>(
         config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| st.fill(data),
-        |e| tracing::warn!("audio stream error: {e}"),
+        // Xruns can come in bursts; count them and let the engine log the total.
+        move |e| {
+            if e.kind() == cpal::ErrorKind::Xrun {
+                shared.xruns.fetch_add(1, Ordering::Relaxed);
+            } else {
+                tracing::warn!("audio stream error: {e}");
+            }
+        },
         None,
     )
 }
