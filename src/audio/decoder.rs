@@ -143,7 +143,7 @@ impl Decoder {
 
             let mut skip = 0usize;
             if let Some(until) = self.skip_until {
-                let behind = until.get() - packet.pts.get();
+                let behind = ticks_to_frames(until.get() - packet.pts.get(), self.time_base, rate);
                 if behind >= frames as i64 {
                     continue;
                 }
@@ -196,5 +196,31 @@ impl Decoder {
             .map(|t| Duration::from_secs_f64(t.as_secs_f64().max(0.0)))
             .unwrap_or(pos);
         Ok(reached)
+    }
+}
+
+/// Converts a span in time-base ticks to frames at `rate`, rounded to nearest.
+/// Without a time base, ticks are already frames.
+fn ticks_to_frames(ticks: i64, tb: Option<TimeBase>, rate: u32) -> i64 {
+    let Some(tb) = tb else { return ticks };
+    let n = ticks as i128 * tb.numer.get() as i128 * rate as i128;
+    let d = tb.denom.get() as i128;
+    ((n + n.signum() * d / 2) / d) as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ticks_to_frames_identity_and_scaled() {
+        let tb = |n, d| TimeBase::try_new(n, d);
+        assert_eq!(ticks_to_frames(12345, tb(1, 44100), 44100), 12345);
+        assert_eq!(ticks_to_frames(250, tb(1, 1000), 48000), 12000);
+        assert_eq!(ticks_to_frames(90000, tb(1, 90000), 44100), 44100);
+        assert_eq!(ticks_to_frames(777, None, 48000), 777);
+        assert_eq!(ticks_to_frames(-250, tb(1, 1000), 48000), -12000);
+        // 1 tick of 1/90000 at 44100 is 0.49 frames: rounds to 0, not up.
+        assert_eq!(ticks_to_frames(1, tb(1, 90000), 44100), 0);
     }
 }
