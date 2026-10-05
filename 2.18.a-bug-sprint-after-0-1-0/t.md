@@ -35,3 +35,13 @@ Before starting, offer the older `user-checks` 12 to 17, especially 15 (gapless 
 Do not run `cargo fmt` on the whole tree: `app.rs` is not rustfmt-clean and a mass reformat buries the real diffs.
 
 After the audio pass: library/MPRIS/M3U A18 to A26 (39 to 47) with E5, E10, E11; then UI A27 to A29 (48 to 50); then Track B starting with B1 (51, also fixes A25).
+
+## Status 2026-10-05 (0.1.3)
+
+0.1.3 tagged (v0.1.3, 0833097). Audio pass done: A13 (34) + E7 (74), A17 (38), A14 (35), A16 (37) + E8 (75), A15 (36), E9 (76), one subagent per task. Tests 67 -> 89 (87 + 2 ignored). Release binary 20.94 MB -> 22.03 MB.
+
+Deviations: A17 dropped the symphonia `mkv` and `caf` features to stay under the 1 MB growth gate, so CAF and MKA are not supported. A15 drops the old stream before opening the new one, and `output::open` returns the rate instead of storing it.
+
+Manual checks filed: 92 to 99 (user-manual). Follow-up: 100 (chained Ogg duration and seek cover only the first stream).
+
+Next: library/MPRIS/M3U A18 to A26 (39 to 47) with E5, E10, E11; then UI A27 to A29 (48 to 50); then Track B starting with B1 (51, also fixes A25).
