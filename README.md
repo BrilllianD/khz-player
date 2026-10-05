@@ -124,3 +124,12 @@ busctl --user get-property org.mpris.MediaPlayer2.khz-player /org/mpris/MediaPla
 ```sh
 RUST_LOG=khz_player=debug khz-player
 ```
+
+## License
+
+khz-player is free software, licensed under the GNU General Public License,
+version 3 or (at your option) any later version. See `LICENSE`.
+
+Third-party crates keep their own licenses: mostly MIT and Apache-2.0, and
+MPL-2.0 for symphonia and mpris-server. The fonts egui embeds are under the
+OFL-1.1 and the Ubuntu Font Licence.
