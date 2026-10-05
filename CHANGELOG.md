@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.4 — 2026-10-05
 
 - Renamed to khz-player. The binary, desktop file, Wayland app id and MPRIS
   name (`org.mpris.MediaPlayer2.khz-player`) follow the new name; update any
