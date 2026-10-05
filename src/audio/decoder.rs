@@ -151,26 +151,7 @@ impl Decoder {
                 self.skip_until = None;
             }
 
-            let src = &self.tmp[skip * ch..frames * ch];
-            match ch {
-                1 => {
-                    out.reserve(src.len() * 2);
-                    for &s in src {
-                        out.push(s);
-                        out.push(s);
-                    }
-                }
-                2 => out.extend_from_slice(src),
-                _ => {
-                    // Simple downmix: front L/R plus the rest folded in equally.
-                    out.reserve(src.len() / ch * 2);
-                    for f in src.chunks_exact(ch) {
-                        let extra: f32 = f[2..].iter().sum::<f32>() / (ch - 2) as f32 * 0.5;
-                        out.push((f[0] + extra) * 0.7);
-                        out.push((f[1] + extra) * 0.7);
-                    }
-                }
-            }
+            mix_to_stereo(&self.tmp[skip * ch..frames * ch], ch, out);
             return Ok(true);
         }
     }
@@ -199,6 +180,29 @@ impl Decoder {
     }
 }
 
+/// Appends `src` (interleaved, `ch` channels) to `out` as interleaved stereo.
+fn mix_to_stereo(src: &[f32], ch: usize, out: &mut Vec<f32>) {
+    match ch {
+        1 => {
+            out.reserve(src.len() * 2);
+            for &s in src {
+                out.push(s);
+                out.push(s);
+            }
+        }
+        2 => out.extend_from_slice(src),
+        _ => {
+            // Simple downmix: front L/R plus the rest folded in equally.
+            out.reserve(src.len() / ch * 2);
+            for f in src.chunks_exact(ch) {
+                let extra: f32 = f[2..].iter().sum::<f32>() / (ch - 2) as f32 * 0.5;
+                out.push((f[0] + extra) * 0.7);
+                out.push((f[1] + extra) * 0.7);
+            }
+        }
+    }
+}
+
 /// Converts a span in time-base ticks to frames at `rate`, rounded to nearest.
 /// Without a time base, ticks are already frames.
 fn ticks_to_frames(ticks: i64, tb: Option<TimeBase>, rate: u32) -> i64 {
@@ -222,5 +226,33 @@ mod tests {
         assert_eq!(ticks_to_frames(-250, tb(1, 1000), 48000), -12000);
         // 1 tick of 1/90000 at 44100 is 0.49 frames: rounds to 0, not up.
         assert_eq!(ticks_to_frames(1, tb(1, 90000), 44100), 0);
+    }
+
+    #[test]
+    fn mix_mono_upmixes_to_both_channels() {
+        let mut out = vec![9.0];
+        mix_to_stereo(&[0.25, -0.5], 1, &mut out);
+        assert_eq!(out, [9.0, 0.25, 0.25, -0.5, -0.5]);
+    }
+
+    #[test]
+    fn mix_stereo_passes_through() {
+        let mut out = Vec::new();
+        mix_to_stereo(&[0.1, 0.2, 0.3, 0.4], 2, &mut out);
+        assert_eq!(out, [0.1, 0.2, 0.3, 0.4]);
+    }
+
+    #[test]
+    fn mix_six_channels_folds_extras() {
+        let (l, r) = (0.4, -0.2);
+        let (c, lfe, sl, sr) = (0.3, 0.1, -0.6, 0.2);
+        let frames = [l, r, c, lfe, sl, sr, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let mut out = Vec::new();
+        mix_to_stereo(&frames, 6, &mut out);
+        let extra = (c + lfe + sl + sr) / 4.0 * 0.5;
+        assert_eq!(out.len(), 4);
+        assert!((out[0] - (l + extra) * 0.7).abs() < 1e-6);
+        assert!((out[1] - (r + extra) * 0.7).abs() < 1e-6);
+        assert_eq!(&out[2..], [0.0, 0.0]);
     }
 }
