@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
+use crossbeam_channel::{Receiver, Sender, select};
 
 use crate::audio::decoder::{Decoder, TrackInfo};
 use crate::audio::resample::Resampler;
@@ -16,6 +16,9 @@ use crate::audio::{Command, Event, PlayerState};
 const IDLE_WAIT: Duration = Duration::from_millis(5);
 const FLUSH_TIMEOUT: Duration = Duration::from_millis(100);
 const XRUN_LOG_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Result of a background open: (generation, path, decoder).
+type Prefetched = (u64, PathBuf, anyhow::Result<Decoder>);
 
 struct Current {
     decoder: Decoder,
@@ -33,6 +36,13 @@ struct Engine {
     /// Path of the audible track, so Play after Stop restarts it.
     last_path: Option<PathBuf>,
     next: Option<(PathBuf, Decoder)>,
+    /// Background opens report here; results whose generation is not
+    /// `prefetch_gen` were superseded and are dropped.
+    prefetch_tx: Sender<Prefetched>,
+    prefetch_rx: Receiver<Prefetched>,
+    prefetch_gen: u64,
+    /// Open in flight for the current generation.
+    pending: Option<PathBuf>,
     /// Decoded, resampled frames not yet pushed to the ring.
     buf: Vec<f32>,
     buf_pos: usize,
@@ -56,6 +66,7 @@ pub fn run(
     repaint: egui::Context,
 ) {
     let out_rate = shared.out_rate();
+    let (prefetch_tx, prefetch_rx) = crossbeam_channel::unbounded();
     let mut e = Engine {
         events,
         shared,
@@ -66,6 +77,10 @@ pub fn run(
         cur: None,
         last_path: None,
         next: None,
+        prefetch_tx,
+        prefetch_rx,
+        prefetch_gen: 0,
+        pending: None,
         buf: Vec::with_capacity(16384),
         buf_pos: 0,
         scratch: Vec::with_capacity(16384),
@@ -75,36 +90,54 @@ pub fn run(
         last_xruns: 0,
         last_xrun_log: Instant::now(),
     };
+    // The engine keeps a sender, so this never disconnects.
+    let prefetched = e.prefetch_rx.clone();
     loop {
         // Only playback (or a gapless mark still to cross) needs ticks; otherwise
-        // nothing changes until the next command, so sleep until it arrives.
-        let cmd = if e.state == PlayerState::Playing || !e.transitions.is_empty() {
-            match rx.recv_timeout(IDLE_WAIT) {
-                Ok(c) => Some(c),
-                Err(RecvTimeoutError::Timeout) => None,
-                Err(RecvTimeoutError::Disconnected) => break,
+        // nothing changes until a command or a finished prefetch arrives.
+        let wake = if e.state == PlayerState::Playing || !e.transitions.is_empty() {
+            select! {
+                recv(rx) -> c => Wake::Command(c.ok()),
+                recv(prefetched) -> r => Wake::Prefetched(r.ok()),
+                default(IDLE_WAIT) => Wake::Tick,
             }
         } else {
-            match rx.recv() {
-                Ok(c) => Some(c),
-                Err(_) => break,
+            select! {
+                recv(rx) -> c => Wake::Command(c.ok()),
+                recv(prefetched) -> r => Wake::Prefetched(r.ok()),
             }
         };
-        if let Some(c) = cmd {
-            if !e.handle(c) {
-                break;
-            }
-            while let Ok(c) = rx.try_recv() {
+        match wake {
+            Wake::Command(None) => break,
+            Wake::Command(Some(c)) => {
                 if !e.handle(c) {
-                    return;
+                    break;
+                }
+                while let Ok(c) = rx.try_recv() {
+                    if !e.handle(c) {
+                        return;
+                    }
                 }
             }
+            Wake::Prefetched(r) => {
+                if let Some(r) = r {
+                    e.prefetched(r);
+                }
+            }
+            Wake::Tick => {}
         }
         if e.state == PlayerState::Playing {
             e.fill();
         }
         e.check_progress();
     }
+}
+
+enum Wake {
+    /// `None` when the command channel disconnected.
+    Command(Option<Command>),
+    Prefetched(Option<Prefetched>),
+    Tick,
 }
 
 impl Engine {
@@ -215,7 +248,7 @@ impl Engine {
     fn load(&mut self, path: PathBuf, play: bool) {
         self.flush();
         self.cur = None;
-        self.next = None;
+        self.cancel_prefetch();
         self.eof = false;
         let opened = Decoder::open(&path).and_then(|d| {
             let info = d.info.clone();
@@ -251,7 +284,7 @@ impl Engine {
     fn stop(&mut self) {
         self.flush();
         self.cur = None;
-        self.next = None;
+        self.cancel_prefetch();
         self.eof = false;
         self.shared
             .track_start
@@ -290,20 +323,50 @@ impl Engine {
         }
     }
 
+    /// Drops the prefetched decoder and makes any open in flight stale.
+    fn cancel_prefetch(&mut self) {
+        self.prefetch_gen += 1;
+        self.next = None;
+        self.pending = None;
+    }
+
+    /// Opens `path` on a short-lived thread: a slow disk must not stall
+    /// `fill`, and the ring holds only 0.3 s. The result arrives through
+    /// `prefetch_rx` and lands in `prefetched`.
     fn prefetch(&mut self, path: Option<PathBuf>) {
         let Some(path) = path else {
-            self.next = None;
+            self.cancel_prefetch();
             return;
         };
-        if self.next.as_ref().is_some_and(|(p, _)| *p == path) {
+        if self.next.as_ref().is_some_and(|(p, _)| *p == path)
+            || self.pending.as_ref() == Some(&path)
+        {
             return;
         }
-        match Decoder::open(&path) {
+        self.cancel_prefetch();
+        let generation = self.prefetch_gen;
+        let tx = self.prefetch_tx.clone();
+        let p = path.clone();
+        let spawned = std::thread::Builder::new()
+            .name("prefetch".into())
+            .spawn(move || {
+                let r = Decoder::open(&p);
+                let _ = tx.send((generation, p, r));
+            });
+        match spawned {
+            Ok(_) => self.pending = Some(path),
+            Err(e) => tracing::warn!("spawn prefetch: {e}"),
+        }
+    }
+
+    fn prefetched(&mut self, (generation, path, result): Prefetched) {
+        if generation != self.prefetch_gen {
+            return;
+        }
+        self.pending = None;
+        match result {
             Ok(d) => self.next = Some((path, d)),
-            Err(e) => {
-                tracing::debug!("prefetch {}: {e:#}", path.display());
-                self.next = None;
-            }
+            Err(e) => tracing::debug!("prefetch {}: {e:#}", path.display()),
         }
     }
 
@@ -542,6 +605,7 @@ mod tests {
         let shared = Arc::new(Shared::new(1.0, 0.0));
         let (ring, ring_rx) = rtrb::RingBuffer::new(48000 * 2 * 3 / 10);
         let (ev_tx, ev_rx) = crossbeam_channel::unbounded();
+        let (prefetch_tx, prefetch_rx) = crossbeam_channel::unbounded();
         let e = Engine {
             events: ev_tx,
             out_rate: shared.out_rate(),
@@ -552,6 +616,10 @@ mod tests {
             cur: None,
             last_path: None,
             next: None,
+            prefetch_tx,
+            prefetch_rx,
+            prefetch_gen: 0,
+            pending: None,
             buf: Vec::new(),
             buf_pos: 0,
             scratch: Vec::new(),
@@ -564,6 +632,53 @@ mod tests {
         (e, ev_rx, ring_rx)
     }
 
+    /// Waits for the next background open to report (any generation).
+    fn recv_prefetch(e: &Engine) -> Prefetched {
+        e.prefetch_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("prefetch result")
+    }
+
+    /// `prefetch` and wait until its result is applied, as the run loop would.
+    fn prefetch_now(e: &mut Engine, path: PathBuf) {
+        e.prefetch(Some(path));
+        let r = recv_prefetch(e);
+        e.prefetched(r);
+        assert!(e.pending.is_none() && e.next.is_some());
+    }
+
+    #[test]
+    fn prefetch_result_from_old_generation_is_ignored() {
+        let dir = crate::config::test_dir("engine-prefetch-gen");
+        let [a, b] = ["a.wav", "b.wav"].map(|n| dir.join(n));
+        for p in [&a, &b] {
+            crate::library::scanner::tests::write_wav(p, 800);
+        }
+        let (mut e, _events, _ring) = test_engine();
+        e.prefetch(Some(a.clone()));
+        e.prefetch(Some(b.clone()));
+        // Same path again while in flight: no new open.
+        e.prefetch(Some(b.clone()));
+        assert_eq!(e.pending.as_ref(), Some(&b));
+        // Deliver A's stale result last, the worst order.
+        let mut results = [recv_prefetch(&e), recv_prefetch(&e)];
+        results.sort_by_key(|r| r.1 == a);
+        for r in results {
+            e.prefetched(r);
+        }
+        assert!(e.prefetch_rx.try_recv().is_err());
+        assert!(e.pending.is_none());
+        assert_eq!(e.next.as_ref().map(|(p, _)| p), Some(&b));
+
+        // A stop makes an open in flight stale too.
+        e.prefetch(Some(a));
+        e.stop();
+        let r = recv_prefetch(&e);
+        e.prefetched(r);
+        assert!(e.next.is_none() && e.pending.is_none());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn load_during_pending_transition_emits_no_advanced() {
         let dir = crate::config::test_dir("engine-pending");
@@ -573,7 +688,7 @@ mod tests {
         }
         let (mut e, events, mut ring) = test_engine();
         e.load(a, true);
-        e.prefetch(Some(b.clone()));
+        prefetch_now(&mut e, b.clone());
         // A is shorter than the ring: decoding runs into B without any of A
         // being played, so the switch to B is pending.
         e.fill();
@@ -587,7 +702,7 @@ mod tests {
 
         // Stop drops a pending switch too, and Play then restarts the audible track.
         while ring.pop().is_ok() {}
-        e.prefetch(Some(b));
+        prefetch_now(&mut e, b);
         e.fill();
         assert_eq!(e.transitions.len(), 1);
         e.stop();
