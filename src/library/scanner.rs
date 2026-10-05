@@ -98,6 +98,11 @@ pub(crate) mod tests {
 
     /// Silent 8 kHz mono 16-bit WAV.
     pub(crate) fn write_wav(path: &std::path::Path, frames: u32) {
+        write_wav_rate(path, frames, 8000);
+    }
+
+    /// Silent mono 16-bit WAV at `rate` Hz.
+    pub(crate) fn write_wav_rate(path: &std::path::Path, frames: u32, rate: u32) {
         let data_len = frames * 2;
         let mut b = Vec::new();
         b.extend_from_slice(b"RIFF");
@@ -106,8 +111,8 @@ pub(crate) mod tests {
         b.extend_from_slice(&16u32.to_le_bytes());
         b.extend_from_slice(&1u16.to_le_bytes()); // PCM
         b.extend_from_slice(&1u16.to_le_bytes()); // mono
-        b.extend_from_slice(&8000u32.to_le_bytes());
-        b.extend_from_slice(&16000u32.to_le_bytes());
+        b.extend_from_slice(&rate.to_le_bytes());
+        b.extend_from_slice(&(rate * 2).to_le_bytes()); // byte rate
         b.extend_from_slice(&2u16.to_le_bytes());
         b.extend_from_slice(&16u16.to_le_bytes());
         b.extend_from_slice(b"data");

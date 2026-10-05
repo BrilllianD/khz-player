@@ -858,6 +858,174 @@ mod tests {
         assert_eq!(e.state, PlayerState::Stopped);
     }
 
+    /// Plays like the realtime callback: acknowledges a flush, then takes up
+    /// to `frames` frames from the ring and advances `consumed` by as many.
+    fn consume(e: &Engine, ring: &mut rtrb::Consumer<f32>, frames: usize) -> usize {
+        if e.shared.flush.load(Ordering::Acquire) {
+            let n = ring.slots();
+            ring.read_chunk(n).unwrap().commit_all();
+            e.shared.flush.store(false, Ordering::Release);
+        }
+        let n = ring.slots().min(frames * 2) & !1;
+        ring.read_chunk(n).unwrap().commit_all();
+        e.shared.consumed.fetch_add(n as u64 / 2, Ordering::AcqRel);
+        n / 2
+    }
+
+    #[test]
+    fn gapless_across_rates_pushes_every_frame_and_advances_on_the_mark() {
+        let dir = crate::config::test_dir("engine-gapless-rates");
+        let [a, b] = ["a.wav", "b.wav"].map(|n| dir.join(n));
+        // 8000 frames each at different rates: 1 s and 0.5 s.
+        crate::library::scanner::tests::write_wav_rate(&a, 8000, 8000);
+        crate::library::scanner::tests::write_wav_rate(&b, 8000, 16000);
+        let (mut e, events, mut ring) = test_engine();
+        assert_eq!(e.out_rate, 48000);
+        e.load(a, true);
+        // No callback ran during the load: ack its flush now, on an empty ring.
+        consume(&e, &mut ring, 0);
+        prefetch_now(&mut e, b.clone());
+        events.try_iter().for_each(drop);
+
+        let mut mark = None;
+        let mut advanced_at = None;
+        let mut ended = 0;
+        // A step that does not divide the mark, so it falls inside one.
+        for _ in 0..1000 {
+            e.fill();
+            if mark.is_none() {
+                mark = e.transitions.front().map(|&(m, _)| m);
+            }
+            let consumed = e.consumed();
+            e.check_progress();
+            for ev in events.try_iter() {
+                match ev {
+                    Event::Advanced(info) => {
+                        assert_eq!(info.path, b);
+                        assert!(advanced_at.is_none(), "Advanced twice");
+                        advanced_at = Some(consumed);
+                    }
+                    Event::TrackEnded => ended += 1,
+                    _ => {}
+                }
+            }
+            if let Some(m) = mark {
+                // Fires on the first check at or past the mark, never before.
+                assert_eq!(
+                    advanced_at.is_some(),
+                    consumed >= m,
+                    "consumed {consumed}, mark {m}"
+                );
+            }
+            if ended > 0 {
+                break;
+            }
+            consume(&e, &mut ring, 777);
+        }
+        let mark = mark.expect("no gapless transition");
+        let advanced_at = advanced_at.expect("no Advanced");
+        assert!(advanced_at >= mark && advanced_at < mark + 777);
+        assert_eq!(ended, 1);
+        // Everything decoded was pushed and played, A and B resampled to 48 kHz.
+        assert!((mark - 48000).abs() <= 2, "A pushed {mark} frames");
+        assert!(
+            (e.pushed_total - mark - 24000).abs() <= 2,
+            "B pushed {} frames",
+            e.pushed_total - mark
+        );
+        assert!(
+            (e.pushed_total - 72000).abs() <= 4,
+            "pushed {}",
+            e.pushed_total
+        );
+        assert_eq!(e.consumed(), e.pushed_total);
+        assert_eq!(ring.slots(), 0);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn track_ends_once_after_the_ring_drains() {
+        let dir = crate::config::test_dir("engine-track-ended");
+        let path = dir.join("t.wav");
+        crate::library::scanner::tests::write_wav(&path, 8000);
+        let (mut e, events, mut ring) = test_engine();
+        e.load(path, true);
+        // No callback ran during the load: ack its flush now, on an empty ring.
+        consume(&e, &mut ring, 0);
+        events.try_iter().for_each(drop);
+
+        // Decode to the end while the ring is drained in steps.
+        loop {
+            e.fill();
+            e.check_progress();
+            if e.eof && e.buf.is_empty() {
+                break;
+            }
+            consume(&e, &mut ring, 4096);
+        }
+        assert!(
+            ring.slots() > 2,
+            "ring drained already, the test proves nothing"
+        );
+        // Decoding is done but the ring still plays: not ended yet. Leave one frame.
+        while ring.slots() > 2 {
+            e.check_progress();
+            assert!(!events.try_iter().any(|ev| matches!(ev, Event::TrackEnded)));
+            let step = (ring.slots() / 2 - 1).min(1000);
+            consume(&e, &mut ring, step);
+        }
+        // One frame left: still playing.
+        e.check_progress();
+        assert!(!events.try_iter().any(|ev| matches!(ev, Event::TrackEnded)));
+        assert_eq!(consume(&e, &mut ring, 1000), 1);
+        for _ in 0..3 {
+            e.fill();
+            e.check_progress();
+        }
+        let ended = events
+            .try_iter()
+            .filter(|ev| matches!(ev, Event::TrackEnded))
+            .count();
+        assert_eq!(ended, 1);
+        assert_eq!(e.state, PlayerState::Stopped);
+        assert!(e.cur.is_none());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Documents today's behaviour: a relative seek past the end stops half a
+    /// second short of it. A24 turns this into Next; update the test then.
+    #[test]
+    fn seek_rel_past_end_clamps_before_the_end() {
+        let dir = crate::config::test_dir("engine-seek-rel");
+        let path = dir.join("t.wav");
+        crate::library::scanner::tests::write_wav(&path, 8000 * 4);
+        let (mut e, events, _ring) = test_engine();
+        e.load(path, true);
+        events.try_iter().for_each(drop);
+
+        e.handle(Command::SeekRel(60_000));
+        let seeked: Vec<Duration> = events
+            .try_iter()
+            .filter_map(|ev| match ev {
+                Event::Seeked(d) => Some(d),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(seeked, [Duration::from_millis(3500)]);
+        assert_eq!(e.position(), Duration::from_millis(3500));
+        assert_eq!(e.state, PlayerState::Playing);
+
+        // And before the start, to zero.
+        e.handle(Command::SeekRel(-60_000));
+        assert!(
+            events
+                .try_iter()
+                .any(|ev| matches!(ev, Event::Seeked(d) if d.is_zero()))
+        );
+        assert_eq!(e.position(), Duration::ZERO);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// Needs a chained Ogg of two or more streams, ideally at different rates
     /// (`cat a.ogg b.ogg > chained.ogg`):
     /// `RMP_TEST_CHAINED_OGG=/path/chained.ogg cargo test chained_ogg -- --ignored`.
