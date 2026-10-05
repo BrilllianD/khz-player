@@ -13,6 +13,32 @@ A Winamp-classic style music player for Linux, written in Rust.
 - Uses the current Omarchy theme colors and follows theme switches;
   falls back to the classic Winamp palette elsewhere.
 
+## Install a release
+
+Prebuilt binaries for x86_64 Linux are on the
+[releases page](https://github.com/BrilllianD/khz-player/releases). They run on
+any distribution with glibc 2.35 or newer: Ubuntu 22.04+, Debian 12+, Fedora 36+,
+Arch and its derivatives such as Omarchy.
+
+Runtime needs: ALSA (`alsa-lib` on Arch, `libasound2` on Debian and Ubuntu,
+`alsa-lib` on Fedora; on PipeWire systems also `pipewire-alsa`) and a Wayland
+or X11 desktop with OpenGL. A D-Bus session bus is optional, for MPRIS.
+
+```sh
+v=0.2.1
+curl -LO https://github.com/BrilllianD/khz-player/releases/download/v$v/khz-player-$v-x86_64-linux.tar.gz
+curl -LO https://github.com/BrilllianD/khz-player/releases/download/v$v/khz-player-$v-x86_64-linux.tar.gz.sha256
+sha256sum -c khz-player-$v-x86_64-linux.tar.gz.sha256
+tar xzf khz-player-$v-x86_64-linux.tar.gz
+./khz-player-$v-x86_64-linux/install.sh
+```
+
+`install.sh` puts the binary in `~/.local/bin`, plus the desktop entry and icons
+under `~/.local/share`, so khz-player shows up in app launchers. For a
+system-wide install use `PREFIX=/usr/local sudo -E ./install.sh`. To remove it,
+run `./install.sh --uninstall` with the same `PREFIX`. Settings and the library
+in `~/.config/khz-player` and `~/.local/share/khz-player` are kept.
+
 ## Build and run
 
 Needs Rust 1.98 or newer, plus ALSA development headers (`alsa-lib`).
@@ -44,6 +70,10 @@ update-desktop-database ~/.local/share/applications
 `--root ~/.local` puts the binary in `~/.local/bin`, which is on the PATH of an
 Omarchy session; `~/.cargo/bin` is not, so app launchers would not find `khz-player`
 there.
+
+`scripts/package.sh` builds the release tarball into `dist/`. It needs Docker
+and compiles inside Ubuntu 22.04, so the binary does not depend on the host's
+newer glibc.
 
 ## Keyboard
 

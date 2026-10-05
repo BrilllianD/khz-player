@@ -1,10 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.2.1 — 2026-10-05
 
 - Sharper app icon at small sizes, such as the 18 px icons in the Omarchy
   menu: a pixel-aligned `kHz` with bigger letters and no glow. Re-run the
   icon lines of the README install block to get it.
+- Licensed under GPL-3.0-or-later.
+- Prebuilt x86_64 Linux tarball on the GitHub releases page.
 
 ## 0.2.0 — 2026-10-05
 
