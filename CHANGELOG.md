@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.3 — 2026-10-05
+
+Audio fixes.
+
+- Seeking in M4A/AAC files lands where the time display says.
+- New formats: ALAC (in M4A/MP4), AIFF, MP1 and MP2. Opus, WavPack, APE and
+  Musepack files were listed but never played; `.opus`, `.wv`, `.ape` and
+  `.mpc` files now leave the library on the next rescan.
+- Chained Ogg streams play to the end, and a sample-rate change in the middle
+  of a file keeps the right pitch.
+- If the audio device disappears or fails to open, rmp retries every 2 s and
+  continues at the same position once a device is back. Paused stays paused.
+- The output format is picked from what the device supports, and every
+  sample format cpal offers works.
+- Volume and balance changes ramp over 10 ms instead of stepping, so fast
+  drags no longer crackle. Loud signals (e.g. EQ +12 dB) are soft-clipped
+  instead of hard-clipped.
+- Lower idle CPU with the EQ on: filter state no longer decays into slow
+  denormal numbers in silence.
+- The next track is opened in the background, so a slow disk no longer
+  stutters the current one.
+- Buffer underruns are counted and logged at most every 10 s instead of
+  one warning each.
+
 ## 0.1.2 — 2026-10-04
 
 - The window title shows the current track: `Artist - Title - rmp`.
