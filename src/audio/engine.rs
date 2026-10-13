@@ -992,8 +992,8 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
-    /// Documents today's behaviour: a relative seek past the end stops half a
-    /// second short of it. A24 turns this into Next; update the test then.
+    /// A relative seek past the end clamps half a second short of it. An MPRIS
+    /// Seek past the end never gets here: the app turns it into Next (A24).
     #[test]
     fn seek_rel_past_end_clamps_before_the_end() {
         let dir = crate::config::test_dir("engine-seek-rel");

@@ -11,7 +11,7 @@ use crate::config::Config;
 use crate::eq_presets::{self, Preset};
 use crate::library::scanner::{self, ScanEvent};
 use crate::library::{Track, db, tags};
-use crate::mpris::{self, Mpris, MprisAction, MprisUpdate};
+use crate::mpris::{self, Caps, Mpris, MprisAction, MprisUpdate};
 use crate::playlist::Playlist;
 use crate::shortcuts::{self, Action};
 use crate::theme::Theme;
@@ -99,6 +99,7 @@ pub struct App {
 
     mpris: Mpris,
     last_mpris_pos: Instant,
+    mpris_caps: Option<Caps>,
 
     pub builtin_presets: Vec<Preset>,
     pub user_presets: Vec<Preset>,
@@ -218,6 +219,7 @@ impl App {
             library_cache: Default::default(),
             mpris,
             last_mpris_pos: Instant::now(),
+            mpris_caps: None,
             open_path: String::new(),
             focus_open: false,
             prompt: None,
@@ -673,6 +675,11 @@ impl App {
                     }
                     self.state = s;
                     self.mpris.send(MprisUpdate::Status(s));
+                    self.mpris.send(MprisUpdate::Position(if s == PlayerState::Stopped {
+                        Duration::ZERO
+                    } else {
+                        self.audio.position()
+                    }));
                 }
                 Event::TrackEnded => {
                     let (repeat, shuffle) = (self.cfg.repeat, self.cfg.shuffle);
@@ -879,7 +886,14 @@ impl App {
                 MprisAction::Stop => self.audio.send(Command::Stop),
                 MprisAction::Next => self.next(),
                 MprisAction::Previous => self.prev(),
-                MprisAction::Seek(us) => self.audio.send(Command::SeekRel(us / 1000)),
+                MprisAction::Seek(us) => {
+                    let len = self.now.as_ref().and_then(|n| n.duration);
+                    if mpris::seek_past_end(self.audio.position(), us, len) {
+                        self.next();
+                    } else {
+                        self.audio.send(Command::SeekRel(us / 1000));
+                    }
+                }
                 MprisAction::SetPosition(us) => self
                     .audio
                     .send(Command::Seek(Duration::from_micros(us.max(0) as u64))),
@@ -895,6 +909,19 @@ impl App {
         {
             self.last_mpris_pos = Instant::now();
             self.mpris.send(MprisUpdate::Position(self.audio.position()));
+        }
+        let nonempty = |l: Option<&Playlist>| l.is_some_and(|p| !p.is_empty());
+        let play_list = self.playlists.get(self.playing_list);
+        let caps = Caps {
+            play: self.now.is_some() || nonempty(self.playlists.get(self.active)),
+            seek: self.state != PlayerState::Stopped
+                && self.now.as_ref().is_some_and(|n| n.duration.is_some()),
+            next: nonempty(play_list),
+            prev: nonempty(play_list),
+        };
+        if self.mpris_caps != Some(caps) {
+            self.mpris_caps = Some(caps);
+            self.mpris.send(MprisUpdate::Caps(caps));
         }
     }
 
