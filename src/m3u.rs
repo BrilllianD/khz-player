@@ -36,16 +36,38 @@ pub fn parse(text: &str, base_dir: &Path) -> Vec<Entry> {
             pending = Some((dur, title));
             continue;
         }
-        if line.starts_with('#') {
+        // A `#` line right after `#EXTINF` is a file name, not a comment (`#EXT*` stays a tag).
+        if line.starts_with('#') && (pending.is_none() || line.starts_with("#EXT")) {
             continue;
         }
-        if line.contains("://") && !line.starts_with("file://") {
+        let is_file_url = line.starts_with("file://");
+        if line.contains("://") && !is_file_url {
             pending = None;
             continue;
         }
-        let raw = line.strip_prefix("file://").unwrap_or(line);
-        let raw = percent_decode(raw, line.starts_with("file://"));
-        let p = PathBuf::from(raw.replace('\\', "/"));
+        let mut raw = line;
+        if is_file_url {
+            raw = &line["file://".len()..];
+            if let Some(rest) = raw.strip_prefix("localhost")
+                && rest.starts_with('/')
+            {
+                raw = rest;
+            } else if !raw.starts_with('/') {
+                // Other hosts are remote, like URLs.
+                pending = None;
+                continue;
+            }
+        }
+        let raw = percent_decode(raw, is_file_url);
+        let p = if has_drive(&raw) {
+            // A drive-letter path cannot resolve on Linux; assume the file sits next to the list.
+            let name = raw[2..].rsplit(['\\', '/']).next().unwrap_or("");
+            base_dir.join(name)
+        } else if raw.contains('\\') && !raw.contains('/') {
+            PathBuf::from(raw.replace('\\', "/"))
+        } else {
+            PathBuf::from(raw)
+        };
         let path = if p.is_absolute() {
             normalize(&p)
         } else {
@@ -63,8 +85,11 @@ pub fn parse(text: &str, base_dir: &Path) -> Vec<Entry> {
 
 pub fn read(path: &Path) -> anyhow::Result<Vec<Entry>> {
     let bytes = std::fs::read(path)?;
-    // Plain .m3u may be Latin-1; lossy decoding keeps ASCII paths intact.
-    let text = String::from_utf8_lossy(&bytes);
+    // Plain .m3u from Windows tools is usually CP1251 when it is not UTF-8.
+    let text = match String::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(e) => crate::library::tags::decode_cp1251(e.as_bytes()),
+    };
     let base = path.parent().unwrap_or(Path::new("/"));
     Ok(parse(&text, base))
 }
@@ -74,10 +99,14 @@ pub fn render(tracks: &[Track], base_dir: Option<&Path>) -> String {
     let mut s = String::from("#EXTM3U\n");
     for t in tracks {
         let secs = t.duration_ms.map(|ms| (ms / 1000) as i64).unwrap_or(-1);
-        s.push_str(&format!("#EXTINF:{secs},{}\n", t.display_name()));
+        let name = t.display_name().replace(['\r', '\n'], " ");
+        s.push_str(&format!("#EXTINF:{secs},{name}\n"));
         let p = base_dir
             .and_then(|b| t.path.strip_prefix(b).ok())
             .unwrap_or(&t.path);
+        if p.is_relative() && p.to_string_lossy().starts_with('#') {
+            s.push_str("./");
+        }
         s.push_str(&p.to_string_lossy());
         s.push('\n');
     }
@@ -87,6 +116,11 @@ pub fn render(tracks: &[Track], base_dir: Option<&Path>) -> String {
 pub fn write(path: &Path, tracks: &[Track]) -> anyhow::Result<()> {
     std::fs::write(path, render(tracks, path.parent()))?;
     Ok(())
+}
+
+fn has_drive(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')
 }
 
 fn normalize(p: &Path) -> PathBuf {
@@ -164,5 +198,76 @@ mod tests {
         assert_eq!(e[0].path, PathBuf::from("/music/Rock/a.mp3"));
         assert_eq!(e[1].path, PathBuf::from("/other/x.flac"));
         assert_eq!(e[1].duration_secs, None);
+    }
+
+    fn one(text: &str) -> Vec<Entry> {
+        parse(text, Path::new("/music"))
+    }
+
+    #[test]
+    fn hash_name_after_extinf() {
+        let e = one("#EXTINF:1,T\n#hash.mp3\n# comment\nb.mp3\n");
+        assert_eq!(e.len(), 2);
+        assert_eq!(e[0].path, PathBuf::from("/music/#hash.mp3"));
+        assert_eq!(e[1].path, PathBuf::from("/music/b.mp3"));
+        assert!(one("# comment\n").is_empty());
+    }
+
+    #[test]
+    fn file_localhost() {
+        let e = one("file://localhost/a/b%20c.mp3\n");
+        assert_eq!(e[0].path, PathBuf::from("/a/b c.mp3"));
+    }
+
+    #[test]
+    fn file_other_host_skipped() {
+        assert!(one("file://host/x.mp3\n").is_empty());
+    }
+
+    #[test]
+    fn windows_drive_path() {
+        let e = one("C:\\Music\\Rock\\a.mp3\n");
+        assert_eq!(e[0].path, PathBuf::from("/music/a.mp3"));
+    }
+
+    #[test]
+    fn windows_relative_path() {
+        let e = one("Rock\\b.mp3\n");
+        assert_eq!(e[0].path, PathBuf::from("/music/Rock/b.mp3"));
+    }
+
+    #[test]
+    fn backslash_with_slash_kept() {
+        let e = one("/a/x\\y.mp3\n");
+        assert_eq!(e[0].path, PathBuf::from("/a/x\\y.mp3"));
+    }
+
+    #[test]
+    fn extinf_attributes() {
+        let e = one("#EXTINF:123 tvg-id=\"x\" group-title=\"y\",Title\na.mp3\n");
+        assert_eq!(e[0].duration_secs, Some(123));
+        assert_eq!(e[0].title.as_deref(), Some("Title"));
+    }
+
+    #[test]
+    fn read_cp1251() {
+        let dir = crate::config::test_dir("m3u-cp1251");
+        let f = dir.join("l.m3u");
+        std::fs::write(&f, b"#EXTM3U\n\xcf\xf0\xe8\xe2\xe5\xf2.mp3\n").unwrap();
+        let e = read(&f).unwrap();
+        assert_eq!(e[0].path, dir.join("Привет.mp3"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn render_newline_and_hash_name() {
+        let mut t = Track::from_path(PathBuf::from("/music/a.mp3"));
+        t.title = Some("a\nb".into());
+        let t2 = Track::from_path(PathBuf::from("/music/#x.mp3"));
+        let text = render(&[t, t2], Some(Path::new("/music")));
+        assert!(text.contains("#EXTINF:-1,a b\n"));
+        assert!(text.contains("\n./#x.mp3\n"));
+        let e = parse(&text, Path::new("/music"));
+        assert_eq!(e[1].path, PathBuf::from("/music/#x.mp3"));
     }
 }
