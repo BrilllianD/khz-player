@@ -214,6 +214,19 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn non_utf8_file_name_is_scanned_once() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = crate::config::test_dir("scan-non-utf8");
+        let music = dir.join("music");
+        std::fs::create_dir_all(&music).unwrap();
+        let db = dir.join("lib.db");
+        write_wav(&music.join(std::ffi::OsStr::from_bytes(b"bad\xff.wav")), 8000);
+        assert_eq!(run(&music, &db), (1, 1, 0));
+        assert_eq!(run(&music, &db), (1, 0, 0));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn incremental_rescan() {
         let dir = std::env::temp_dir().join(format!("khz-scan-{}", std::process::id()));
         let music = dir.join("music");

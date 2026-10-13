@@ -1,8 +1,11 @@
 //! SQLite storage for the library, playlists and per-track EQ presets.
 
 use std::collections::HashMap;
+use std::ffi::OsString;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 
+use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 
 use super::Track;
@@ -67,8 +70,19 @@ fn setup(conn: &Connection) -> rusqlite::Result<()> {
     migrate(conn)
 }
 
+const SCHEMA_VERSION: i64 = 5;
+
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    if version > SCHEMA_VERSION {
+        return Err(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
+            Some(format!(
+                "library.db schema version {version} is newer than this build supports \
+                 ({SCHEMA_VERSION})"
+            )),
+        ));
+    }
     if version < 1 {
         conn.execute_batch(&format!("BEGIN; {SCHEMA_V1} PRAGMA user_version = 1; COMMIT;"))?;
     }
@@ -78,16 +92,42 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // keep their paths.
         conn.execute_batch("BEGIN; DELETE FROM tracks; PRAGMA user_version = 4; COMMIT;")?;
     }
+    if version < 5 {
+        // Paths become raw bytes. A TEXT-affinity column stores BLOBs unchanged, so no
+        // table rebuild is needed. Old lossy rows stop matching and are pruned by the
+        // next scan.
+        conn.execute_batch(
+            "BEGIN; \
+             UPDATE tracks SET path = CAST(path AS BLOB) WHERE typeof(path) = 'text'; \
+             UPDATE playlist_items SET path = CAST(path AS BLOB) WHERE typeof(path) = 'text'; \
+             UPDATE eq_auto SET path = CAST(path AS BLOB) WHERE typeof(path) = 'text'; \
+             DROP INDEX IF EXISTS idx_tracks_artist_album; \
+             PRAGMA user_version = 5; COMMIT;",
+        )?;
+    }
     Ok(())
 }
 
-fn path_str(p: &Path) -> String {
-    p.to_string_lossy().into_owned()
+fn path_bytes(p: &Path) -> &[u8] {
+    p.as_os_str().as_bytes()
+}
+
+fn get_path(r: &Row<'_>, i: usize) -> rusqlite::Result<PathBuf> {
+    match r.get_ref(i)? {
+        ValueRef::Blob(b) | ValueRef::Text(b) => {
+            Ok(PathBuf::from(OsString::from_vec(b.to_vec())))
+        }
+        other => Err(rusqlite::Error::InvalidColumnType(
+            i,
+            "path".into(),
+            other.data_type(),
+        )),
+    }
 }
 
 fn row_to_track(r: &Row<'_>) -> rusqlite::Result<Track> {
     Ok(Track {
-        path: PathBuf::from(r.get::<_, String>(0)?),
+        path: get_path(r, 0)?,
         mtime: r.get(1)?,
         size: r.get(2)?,
         title: r.get(3)?,
@@ -117,7 +157,7 @@ pub fn load_tracks(conn: &Connection) -> rusqlite::Result<Vec<Track>> {
 pub fn get_track(conn: &Connection, path: &Path) -> rusqlite::Result<Option<Track>> {
     conn.query_row(
         &format!("SELECT {TRACK_COLS} FROM tracks WHERE path = ?1"),
-        [path_str(path)],
+        [path_bytes(path)],
         row_to_track,
     )
     .optional()
@@ -126,10 +166,7 @@ pub fn get_track(conn: &Connection, path: &Path) -> rusqlite::Result<Option<Trac
 pub fn stamps(conn: &Connection) -> rusqlite::Result<HashMap<PathBuf, (i64, i64)>> {
     let mut stmt = conn.prepare("SELECT path, mtime, size FROM tracks")?;
     stmt.query_map([], |r| {
-        Ok((
-            PathBuf::from(r.get::<_, String>(0)?),
-            (r.get(1)?, r.get(2)?),
-        ))
+        Ok((get_path(r, 0)?, (r.get(1)?, r.get(2)?)))
     })?
     .collect()
 }
@@ -146,7 +183,7 @@ pub fn upsert_track(tx: &Transaction<'_>, t: &Track) -> rusqlite::Result<()> {
          sample_rate=excluded.sample_rate, channels=excluded.channels, seen=1"
     ))?
     .execute(params![
-        path_str(&t.path),
+        path_bytes(&t.path),
         t.mtime,
         t.size,
         t.title,
@@ -167,17 +204,27 @@ pub fn upsert_track(tx: &Transaction<'_>, t: &Track) -> rusqlite::Result<()> {
 
 pub fn mark_seen(tx: &Transaction<'_>, path: &Path) -> rusqlite::Result<()> {
     tx.prepare_cached("UPDATE tracks SET seen = 1 WHERE path = ?1")?
-        .execute([path_str(path)])?;
+        .execute([path_bytes(path)])?;
     Ok(())
 }
 
 /// Clears `seen` for tracks under `roots` before a scan.
 pub fn clear_seen(conn: &Connection, roots: &[PathBuf]) -> rusqlite::Result<()> {
     for root in roots {
-        let prefix = format!("{}/", path_str(root).trim_end_matches('/'));
+        // Range [root + "/", root + "0"): '0' is '/' + 1, so it covers exactly the subtree
+        // and uses the primary key index.
+        let mut lo = path_bytes(root).to_vec();
+        while lo.len() > 1 && lo.ends_with(b"/") {
+            lo.pop();
+        }
+        if lo != b"/" {
+            lo.push(b'/');
+        }
+        let mut hi = lo.clone();
+        *hi.last_mut().unwrap() = b'0';
         conn.execute(
-            "UPDATE tracks SET seen = 0 WHERE substr(path, 1, length(?1)) = ?1",
-            [prefix],
+            "UPDATE tracks SET seen = 0 WHERE path >= ?1 AND path < ?2",
+            params![lo, hi],
         )?;
     }
     Ok(())
@@ -208,7 +255,7 @@ pub fn load_playlists(conn: &Connection) -> rusqlite::Result<Vec<Playlist>> {
                 if r.get::<_, bool>(15)? {
                     row_to_track(r)
                 } else {
-                    Ok(Track::from_path(PathBuf::from(r.get::<_, String>(0)?)))
+                    Ok(Track::from_path(get_path(r, 0)?))
                 }
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -245,7 +292,7 @@ pub fn save_playlist(conn: &mut Connection, p: &mut Playlist, position: usize) -
             "INSERT INTO playlist_items (playlist_id, position, path) VALUES (?1, ?2, ?3)",
         )?;
         for (i, t) in p.tracks.iter().enumerate() {
-            ins.execute(params![id, i as i64, path_str(&t.path)])?;
+            ins.execute(params![id, i as i64, path_bytes(&t.path)])?;
         }
     }
     tx.commit()?;
@@ -264,7 +311,7 @@ pub fn delete_playlist(conn: &Connection, id: i64) -> rusqlite::Result<()> {
 pub fn eq_auto_get(conn: &Connection, path: &Path) -> rusqlite::Result<Option<String>> {
     conn.query_row(
         "SELECT preset FROM eq_auto WHERE path = ?1",
-        [path_str(path)],
+        [path_bytes(path)],
         |r| r.get(0),
     )
     .optional()
@@ -275,9 +322,9 @@ pub fn eq_auto_set(conn: &Connection, path: &Path, preset: Option<&str>) -> rusq
         Some(p) => conn.execute(
             "INSERT INTO eq_auto (path, preset) VALUES (?1, ?2) \
              ON CONFLICT(path) DO UPDATE SET preset = excluded.preset",
-            params![path_str(path), p],
+            params![path_bytes(path), p],
         )?,
-        None => conn.execute("DELETE FROM eq_auto WHERE path = ?1", [path_str(path)])?,
+        None => conn.execute("DELETE FROM eq_auto WHERE path = ?1", [path_bytes(path)])?,
     };
     Ok(())
 }
@@ -305,7 +352,7 @@ mod tests {
         let v: i64 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 4);
+        assert_eq!(v, SCHEMA_VERSION);
     }
 
     #[test]
@@ -332,6 +379,78 @@ mod tests {
         assert!(left.contains(&PathBuf::from("/m/a.mp3")));
         assert!(left.contains(&PathBuf::from("/other/c.mp3")));
         assert_eq!(stamps(&conn).unwrap()[Path::new("/m/a.mp3")], (1, 2));
+    }
+
+    #[test]
+    fn clear_seen_is_a_subtree_range() {
+        let mut conn = open_memory().unwrap();
+        let tx = conn.transaction().unwrap();
+        for p in ["/m/x.mp3", "/m/sub/y.mp3", "/m2/z.mp3", "/other/c.mp3"] {
+            upsert_track(&tx, &track(p, "t")).unwrap();
+        }
+        tx.commit().unwrap();
+        clear_seen(&conn, &[PathBuf::from("/m/")]).unwrap();
+        assert_eq!(delete_unseen(&conn).unwrap(), 2);
+        let left: Vec<_> = load_tracks(&conn).unwrap().into_iter().map(|t| t.path).collect();
+        assert_eq!(
+            left,
+            [PathBuf::from("/m2/z.mp3"), PathBuf::from("/other/c.mp3")]
+        );
+        clear_seen(&conn, &[PathBuf::from("/")]).unwrap();
+        assert_eq!(delete_unseen(&conn).unwrap(), 2);
+    }
+
+    #[test]
+    fn refuses_newer_schema() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "user_version", 6).unwrap();
+        assert!(migrate(&conn).is_err());
+        let v: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 6);
+    }
+
+    #[test]
+    fn v4_text_paths_migrate() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_V1).unwrap();
+        conn.execute_batch(
+            "INSERT INTO tracks (path, mtime, size, title) VALUES ('/m/a.mp3', 1, 2, 'Known'); \
+             INSERT INTO playlists (id, name, position) VALUES (1, 'Rock', 0); \
+             INSERT INTO playlist_items (playlist_id, position, path) VALUES (1, 0, '/m/a.mp3'); \
+             INSERT INTO eq_auto (path, preset) VALUES ('/m/a.mp3', 'Pop'); \
+             PRAGMA user_version = 4;",
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        let t = get_track(&conn, Path::new("/m/a.mp3")).unwrap().unwrap();
+        assert_eq!(t.title.as_deref(), Some("Known"));
+        let lists = load_playlists(&conn).unwrap();
+        assert_eq!(lists[0].tracks[0].title.as_deref(), Some("Known"));
+        assert_eq!(
+            eq_auto_get(&conn, Path::new("/m/a.mp3")).unwrap().as_deref(),
+            Some("Pop")
+        );
+        let n: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name = 'idx_tracks_artist_album'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn non_utf8_path_roundtrip() {
+        let mut conn = open_memory().unwrap();
+        let p = PathBuf::from(std::ffi::OsStr::from_bytes(b"/m/bad\xff.mp3"));
+        let tx = conn.transaction().unwrap();
+        upsert_track(&tx, &Track { path: p.clone(), ..track("x", "bad") }).unwrap();
+        tx.commit().unwrap();
+        assert!(get_track(&conn, &p).unwrap().is_some());
+        assert_eq!(stamps(&conn).unwrap()[&p], (1, 2));
     }
 
     #[test]
