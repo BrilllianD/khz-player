@@ -35,6 +35,8 @@ pub struct Cache {
     generation: Option<u64>,
     /// Every track index in tree order (artist, album, disc, track, path).
     order: Vec<usize>,
+    /// Lowercase (artist, album) per track index; sort and grouping key.
+    keys: Vec<(String, String)>,
     /// Lowercased search text per track index; built on the first search.
     hay: Vec<String>,
     query: String,
@@ -77,6 +79,7 @@ pub fn refresh(cache: &mut Cache, library: &[Track], generation: u64, query: &st
         let mut order: Vec<usize> = (0..library.len()).collect();
         order.sort_by(|&a, &b| key(a).cmp(&key(b)));
         cache.order = order;
+        cache.keys = names;
         cache.hay.clear();
         cache.generation = Some(generation);
     }
@@ -91,6 +94,7 @@ pub fn refresh(cache: &mut Cache, library: &[Track], generation: u64, query: &st
     }
     let mut artists: Vec<Artist> = Vec::new();
     let mut matches = 0;
+    let mut prev: Option<usize> = None;
     for i in cache.order.iter().copied() {
         if !terms.iter().all(|w| cache.hay[i].contains(w.as_str())) {
             continue;
@@ -98,7 +102,8 @@ pub fn refresh(cache: &mut Cache, library: &[Track], generation: u64, query: &st
         matches += 1;
         let t = &library[i];
         let (ar, al) = (t.group_artist(), t.group_album());
-        if artists.last().is_none_or(|a| !a.name.eq_ignore_ascii_case(ar)) {
+        let new_artist = prev.is_none_or(|p| cache.keys[p].0 != cache.keys[i].0);
+        if new_artist {
             artists.push(Artist {
                 name: ar.to_string(),
                 label: String::new(),
@@ -108,11 +113,7 @@ pub fn refresh(cache: &mut Cache, library: &[Track], generation: u64, query: &st
         }
         let artist = artists.last_mut().expect("artist");
         artist.count += 1;
-        if artist
-            .albums
-            .last()
-            .is_none_or(|a| !a.name.eq_ignore_ascii_case(al))
-        {
+        if new_artist || prev.is_some_and(|p| cache.keys[p].1 != cache.keys[i].1) {
             let year = t.year.map(|y| format!(" [{y}]")).unwrap_or_default();
             artist.albums.push(Album {
                 name: al.to_string(),
@@ -121,6 +122,7 @@ pub fn refresh(cache: &mut Cache, library: &[Track], generation: u64, query: &st
             });
         }
         artist.albums.last_mut().expect("album").tracks.push(i);
+        prev = Some(i);
     }
     for a in &mut artists {
         a.label = format!("{}  ({})", a.name, a.count);
@@ -474,5 +476,42 @@ mod tests {
         // A small search result opens everything regardless of the sets.
         refresh(&mut c, &lib, 1, "bee");
         assert_eq!(c.visible_rows(true), [Row::Artist(0), Row::Album(0, 0), Row::Track(3)]);
+    }
+
+    #[test]
+    fn groups_case_variants_of_cyrillic_names() {
+        let lib = vec![
+            track("Кино", "Звезда", 1, "a"),
+            track("КИНО", "ЗВЕЗДА", 2, "b"),
+            track("кино", "Другой", 1, "c"),
+        ];
+        let mut c = Cache::default();
+        refresh(&mut c, &lib, 1, "");
+        assert_eq!(c.artists.len(), 1);
+        assert_eq!(c.artists[0].count, 3);
+        assert_eq!(c.artists[0].albums.len(), 2);
+        let star = c.artists[0].albums.iter().find(|al| al.name.to_lowercase() == "звезда");
+        assert_eq!(star.expect("album").tracks, [0, 1]);
+    }
+
+    #[test]
+    fn forced_open_follows_searching_flag() {
+        let lib = vec![
+            track("Кино", "Звезда", 1, "a"),
+            track("КИНО", "ЗВЕЗДА", 2, "b"),
+            track("кино", "Другой", 1, "c"),
+        ];
+        let mut c = Cache::default();
+        refresh(&mut c, &lib, 1, "кино");
+        assert_eq!(c.matches, 3);
+        // 1 artist + 2 albums + 3 tracks.
+        assert_eq!(c.visible_rows(true).len(), 6);
+        refresh(&mut c, &lib, 1, "");
+        assert_eq!(c.visible_rows(false), [Row::Artist(0)]);
+
+        let big: Vec<Track> = (0..201).map(|n| track("a", "A1", n, "t")).collect();
+        refresh(&mut c, &big, 2, "t");
+        assert_eq!(c.matches, 201);
+        assert_eq!(c.visible_rows(true), [Row::Artist(0)]);
     }
 }
