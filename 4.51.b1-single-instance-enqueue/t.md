@@ -1,3 +1,3 @@
 # B1: single instance + enqueue
 
-main.rs:13 probes org.mpris.MediaPlayer2.rmp; if present, forward args via OpenUri and exit. connect_open_uri (mpris.rs:149) -> MprisAction::OpenUri -> add_path (app.rs:442). Enables Exec=rmp %F. Fixes A25.
+main.rs (fn main, before eframe::run_native) probes org.mpris.MediaPlayer2.khz-player on the session bus; if present, forward args via OpenUri and exit. Register an OpenUri handler in mpris.rs (Player::builder, mpris.rs:99) -> MprisAction::OpenUri -> add_path (app.rs:475). Enables Exec=khz-player %F. Fixes A25.
