@@ -5,6 +5,7 @@ use std::path::Path;
 use lofty::config::{ParseOptions, ParsingMode};
 use lofty::prelude::*;
 use lofty::probe::Probe;
+use lofty::tag::Tag;
 
 use super::Track;
 
@@ -74,6 +75,17 @@ pub fn fix_cp1251(s: &str) -> String {
         .collect()
 }
 
+fn apply_tag(t: &mut Track, tag: &Tag) {
+    t.title = clean(tag.title());
+    t.artist = clean(tag.artist());
+    t.album = clean(tag.album());
+    t.genre = clean(tag.genre());
+    t.track_no = tag.track();
+    t.disc_no = tag.disk();
+    t.year = tag.date().map(|d| d.year as u32).filter(|&y| y > 0);
+    t.album_artist = clean(tag.get_string(ItemKey::AlbumArtist).map(std::borrow::Cow::Borrowed));
+}
+
 /// Reads metadata; on failure returns a track with only path and file stamp,
 /// so the title falls back to the file stem.
 pub fn read(path: &Path) -> Track {
@@ -105,25 +117,34 @@ pub fn read(path: &Path) -> Track {
     t.sample_rate = props.sample_rate();
     t.channels = props.channels();
     if let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag()) {
-        t.title = clean(tag.title());
-        t.artist = clean(tag.artist());
-        t.album = clean(tag.album());
-        t.genre = clean(tag.genre());
-        t.track_no = tag.track();
-        t.disc_no = tag.disk();
-        t.year = tag.date().map(|d| d.year as u32).filter(|&y| y > 0);
-        t.album_artist = tag
-            .get_string(ItemKey::AlbumArtist)
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
+        apply_tag(&mut t, tag);
     }
     t
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AUDIO_EXTENSIONS, fix_cp1251, is_audio, is_lost};
+    use super::{AUDIO_EXTENSIONS, apply_tag, fix_cp1251, is_audio, is_lost};
+    use crate::library::Track;
+    use lofty::prelude::*;
+    use lofty::tag::{Tag, TagType};
     use std::path::Path;
+
+    fn album_artist_of(raw: &str) -> Option<String> {
+        let mut tag = Tag::new(TagType::Id3v2);
+        tag.insert_text(ItemKey::AlbumArtist, raw.into());
+        tag.set_title("Àðèÿ".into());
+        let mut t = Track::default();
+        apply_tag(&mut t, &tag);
+        t.album_artist
+    }
+
+    #[test]
+    fn album_artist_is_cleaned() {
+        assert_eq!(album_artist_of("  Ïðèâåò  ").as_deref(), Some("Привет"));
+        assert_eq!(album_artist_of("???????"), None);
+        assert_eq!(album_artist_of("   "), None);
+    }
 
     #[test]
     fn is_audio_matches_decodable_set() {
