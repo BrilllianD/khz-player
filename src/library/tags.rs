@@ -5,7 +5,7 @@ use std::path::Path;
 use lofty::config::{ParseOptions, ParsingMode};
 use lofty::prelude::*;
 use lofty::probe::Probe;
-use lofty::tag::Tag;
+use lofty::tag::{Tag, TagType};
 
 use super::Track;
 
@@ -36,8 +36,8 @@ pub fn file_stamp(path: &Path) -> (i64, i64) {
     }
 }
 
-fn clean(s: Option<std::borrow::Cow<'_, str>>) -> Option<String> {
-    s.map(|v| fix_cp1251(v.trim()))
+fn clean(s: Option<std::borrow::Cow<'_, str>>, legacy: bool) -> Option<String> {
+    s.map(|v| if legacy { fix_cp1251(v.trim()) } else { v.trim().to_string() })
         .filter(|v| !v.is_empty() && !is_lost(v))
 }
 
@@ -49,41 +49,50 @@ fn is_lost(s: &str) -> bool {
 }
 
 /// Old Russian rips store CP1251 bytes in tags declared as Latin-1, which decode
-/// to strings like "ËÅÌÏÉÀÄÀ". Re-decode when the text is only Latin-1 and most
-/// of its letters fall in the CP1251 Cyrillic range (0xC0..=0xFF).
+/// to strings like "ËÅÌÏÉÀÄÀ". Re-decode when the text is only Latin-1, at least 3
+/// characters fall in the CP1251 Cyrillic range (0xC0..=0xFF) and they make up at
+/// least half of the letters. Short real Latin-1 like "Café" stays.
 pub fn fix_cp1251(s: &str) -> String {
     if s.chars().any(|c| c as u32 > 0xFF) {
         return s.to_string();
     }
     let letters = s.chars().filter(|c| c.is_alphabetic()).count();
     let high = s.chars().filter(|&c| (0xC0..=0xFF).contains(&(c as u32))).count();
-    if high == 0 || high * 2 < letters {
+    if high < 3 || high * 2 < letters {
         return s.to_string();
     }
-    s.chars()
-        .map(|c| match c as u32 {
-            b @ 0xC0..=0xFF => char::from_u32(0x0410 + (b - 0xC0)).unwrap_or(c),
-            0xA8 => 'Ё',
-            0xB8 => 'ё',
-            0xB9 => '№',
-            0xAB => '«',
-            0xBB => '»',
-            0x96 => '–',
-            0x97 => '—',
-            _ => c,
-        })
-        .collect()
+    s.chars().map(|c| cp1251_char(c as u8)).collect()
+}
+
+/// Decodes raw CP1251 bytes (ASCII passes through).
+pub fn decode_cp1251(bytes: &[u8]) -> String {
+    bytes.iter().map(|&b| cp1251_char(b)).collect()
+}
+
+fn cp1251_char(b: u8) -> char {
+    match b {
+        0xC0..=0xFF => char::from_u32(0x0410 + (b as u32 - 0xC0)).unwrap_or(char::from(b)),
+        0xA8 => 'Ё',
+        0xB8 => 'ё',
+        0xB9 => '№',
+        0xAB => '«',
+        0xBB => '»',
+        0x96 => '–',
+        0x97 => '—',
+        _ => char::from(b),
+    }
 }
 
 fn apply_tag(t: &mut Track, tag: &Tag) {
-    t.title = clean(tag.title());
-    t.artist = clean(tag.artist());
-    t.album = clean(tag.album());
-    t.genre = clean(tag.genre());
+    let legacy = matches!(tag.tag_type(), TagType::Id3v1 | TagType::Id3v2);
+    t.title = clean(tag.title(), legacy);
+    t.artist = clean(tag.artist(), legacy);
+    t.album = clean(tag.album(), legacy);
+    t.genre = clean(tag.genre(), legacy);
     t.track_no = tag.track();
     t.disc_no = tag.disk();
     t.year = tag.date().map(|d| d.year as u32).filter(|&y| y > 0);
-    t.album_artist = clean(tag.get_string(ItemKey::AlbumArtist).map(std::borrow::Cow::Borrowed));
+    t.album_artist = clean(tag.get_string(ItemKey::AlbumArtist).map(std::borrow::Cow::Borrowed), legacy);
 }
 
 /// Reads metadata; on failure returns a track with only path and file stamp,
@@ -124,7 +133,7 @@ pub fn read(path: &Path) -> Track {
 
 #[cfg(test)]
 mod tests {
-    use super::{AUDIO_EXTENSIONS, apply_tag, fix_cp1251, is_audio, is_lost};
+    use super::{AUDIO_EXTENSIONS, apply_tag, decode_cp1251, fix_cp1251, is_audio, is_lost};
     use crate::library::Track;
     use lofty::prelude::*;
     use lofty::tag::{Tag, TagType};
@@ -199,5 +208,28 @@ mod tests {
         assert_eq!(fix_cp1251("Sigur Rós - Hoppípolla"), "Sigur Rós - Hoppípolla");
         assert_eq!(fix_cp1251("Ария"), "Ария");
         assert_eq!(fix_cp1251("Plain ASCII"), "Plain ASCII");
+    }
+
+    #[test]
+    fn short_latin1_is_not_repaired() {
+        assert_eq!(fix_cp1251("Éé"), "Éé");
+        assert_eq!(fix_cp1251("Ça"), "Ça");
+        assert_eq!(fix_cp1251("Café"), "Café");
+    }
+
+    #[test]
+    fn decodes_cp1251_bytes() {
+        assert_eq!(decode_cp1251(b"\xcf\xf0\xe8\xe2\xe5\xf2 1.mp3"), "Привет 1.mp3");
+    }
+
+    #[test]
+    fn only_id3_tags_are_repaired() {
+        for (ty, want) in [(TagType::VorbisComments, "Ïðèâåò"), (TagType::Id3v2, "Привет")] {
+            let mut tag = Tag::new(ty);
+            tag.set_title("Ïðèâåò".into());
+            let mut t = Track::default();
+            apply_tag(&mut t, &tag);
+            assert_eq!(t.title.as_deref(), Some(want));
+        }
     }
 }
