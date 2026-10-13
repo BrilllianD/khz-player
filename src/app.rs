@@ -643,10 +643,9 @@ impl App {
             .library_roots
             .iter()
             .map(|r| expand_tilde(r))
-            .filter(|r| r.is_dir())
             .collect();
         if roots.is_empty() {
-            self.toast("No library folders found (library_roots in config.toml)");
+            self.toast("No library folders configured (library_roots in config.toml)");
             return;
         }
         self.scan_progress = Some((0, 0));
@@ -804,7 +803,14 @@ impl App {
                     tracks,
                     updated,
                     removed,
+                    errors,
                 } => {
+                    if let Some(first) = errors.first() {
+                        self.toast(format!(
+                            "Library scan: {} problem(s), first: {first}",
+                            errors.len()
+                        ));
+                    }
                     self.library = tracks;
                     self.library_gen += 1;
                     self.refresh_playlist_metadata();

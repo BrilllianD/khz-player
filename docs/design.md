@@ -93,7 +93,7 @@ src/
 | UI (eframe) | drains `Receiver<Event>`, `ScanEvent`, `ThemeEvent`; sends `Command`, `MprisUpdate` | crossbeam-channel |
 | audio-engine | `recv_timeout(2-5ms)` loop, decode + resample, push to `rtrb::Producer<f32>` | sends `Event` + `ctx.request_repaint()` |
 | cpal callback | `rtrb::Consumer` -> DSP -> out; spectrum tap `rtrb::Producer` (cap 8192, drop if full) | reads `Arc<Shared>` atomics only; no locks/alloc/log |
-| scanner | own rusqlite Connection, WAL, 200-row transactions | `ScanEvent::{Progress, Done(Vec<Track>), Error}` |
+| scanner | own rusqlite Connection, WAL, 200-row transactions | `ScanEvent::{Progress, Done(Vec<Track>, walk errors), Error}` |
 | mpris | `zbus::block_on(zip(player.run(), update_loop))` | pushes `Command`; `async_channel::Receiver<MprisUpdate>` |
 | theme-watch | notify callback, debounce | `ThemeEvent::Changed` + repaint |
 

@@ -1,6 +1,6 @@
 //! Background library scan: walk roots, read changed files, prune missing ones.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crossbeam_channel::Receiver;
 use walkdir::WalkDir;
@@ -16,6 +16,8 @@ pub enum ScanEvent {
         tracks: Vec<Track>,
         updated: usize,
         removed: usize,
+        /// Walk problems; the affected roots kept their tracks.
+        errors: Vec<String>,
     },
     Error(String),
 }
@@ -40,6 +42,39 @@ pub fn start(roots: Vec<PathBuf>, db_path: PathBuf, repaint: egui::Context) -> R
     rx
 }
 
+/// Result of walking one library root.
+struct RootWalk {
+    files: Vec<PathBuf>,
+    errors: Vec<String>,
+}
+
+impl RootWalk {
+    /// A root that failed or looks empty (e.g. an unmounted drive) keeps its tracks.
+    fn prunable(&self) -> bool {
+        self.errors.is_empty() && !self.files.is_empty()
+    }
+}
+
+fn walk_root(root: &Path) -> RootWalk {
+    let mut walk = RootWalk {
+        files: Vec::new(),
+        errors: Vec::new(),
+    };
+    for entry in WalkDir::new(root).follow_links(true) {
+        match entry {
+            Ok(e) if e.file_type().is_file() && tags::is_audio(e.path()) => {
+                walk.files.push(e.into_path());
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!("scan walk: {e}");
+                walk.errors.push(e.to_string());
+            }
+        }
+    }
+    walk
+}
+
 fn scan(
     roots: &[PathBuf],
     db_path: &std::path::Path,
@@ -47,20 +82,29 @@ fn scan(
 ) -> anyhow::Result<ScanEvent> {
     let started = std::time::Instant::now();
     let mut conn = db::open(db_path)?;
-    let mut files: Vec<PathBuf> = roots
-        .iter()
-        .flat_map(|r| WalkDir::new(r).follow_links(true).into_iter())
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file() && tags::is_audio(e.path()))
-        .map(|e| e.into_path())
-        .collect();
+    let mut files: Vec<PathBuf> = Vec::new();
+    let mut prune_roots: Vec<PathBuf> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    for root in roots {
+        let walk = walk_root(root);
+        if walk.prunable() {
+            prune_roots.push(root.clone());
+        } else if walk.errors.is_empty() {
+            errors.push(format!(
+                "{}: no audio files found, kept its tracks",
+                root.display()
+            ));
+        }
+        errors.extend(walk.errors);
+        files.extend(walk.files);
+    }
     files.sort();
     files.dedup();
     let total = files.len();
     send(ScanEvent::Progress { done: 0, total });
 
     let known = db::stamps(&conn)?;
-    db::clear_seen(&conn, roots)?;
+    db::clear_seen(&conn, &prune_roots)?;
     let mut updated = 0;
     // Tags are read before the transaction so the write lock is held only for the inserts.
     for (i, batch) in files.chunks(BATCH).enumerate() {
@@ -93,13 +137,15 @@ fn scan(
     let removed = db::delete_unseen(&conn)?;
     let tracks = db::load_tracks(&conn)?;
     tracing::info!(
-        "library scan: {total} files, {updated} updated, {removed} removed in {:.1}s",
+        "library scan: {total} files, {updated} updated, {removed} removed, {} walk problems in {:.1}s",
+        errors.len(),
         started.elapsed().as_secs_f32()
     );
     Ok(ScanEvent::Done {
         tracks,
         updated,
         removed,
+        errors,
     })
 }
 
@@ -161,6 +207,7 @@ pub(crate) mod tests {
                 tracks,
                 updated,
                 removed,
+                ..
             } => (tracks.len(), updated, removed),
             other => panic!("{other:?}"),
         }
@@ -190,6 +237,66 @@ pub(crate) mod tests {
         let t = &db::load_tracks(&conn).unwrap()[0];
         assert_eq!(t.duration_ms, Some(500));
         assert_eq!(t.display_title(), "a");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn prunable_rules() {
+        let f = || vec![PathBuf::from("a.wav")];
+        let e = || vec!["boom".to_string()];
+        assert!(RootWalk { files: f(), errors: vec![] }.prunable());
+        assert!(!RootWalk { files: vec![], errors: vec![] }.prunable());
+        assert!(!RootWalk { files: f(), errors: e() }.prunable());
+    }
+
+    #[test]
+    fn walk_missing_root_errors() {
+        let dir = crate::config::test_dir("walk-missing");
+        let walk = walk_root(&dir.join("nope"));
+        assert_eq!(walk.errors.len(), 1);
+        assert!(!walk.prunable());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn run_roots(roots: &[PathBuf], db: &Path) -> (usize, usize, usize, usize) {
+        match scan(roots, db, &|_| {}).unwrap() {
+            ScanEvent::Done {
+                tracks,
+                updated,
+                removed,
+                errors,
+            } => (tracks.len(), updated, removed, errors.len()),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn emptied_root_keeps_tracks() {
+        let dir = crate::config::test_dir("scan-emptied");
+        let music = dir.join("music");
+        std::fs::create_dir_all(&music).unwrap();
+        let db = dir.join("lib.db");
+        write_wav(&music.join("a.wav"), 8000);
+        write_wav(&music.join("b.wav"), 8000);
+        assert_eq!(run_roots(std::slice::from_ref(&music), &db), (2, 2, 0, 0));
+        std::fs::remove_file(music.join("a.wav")).unwrap();
+        std::fs::remove_file(music.join("b.wav")).unwrap();
+        assert_eq!(run_roots(&[music], &db), (2, 0, 0, 1));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn missing_root_does_not_block_pruning_others() {
+        let dir = crate::config::test_dir("scan-missing");
+        let music = dir.join("music");
+        std::fs::create_dir_all(&music).unwrap();
+        let db = dir.join("lib.db");
+        let roots = [music.clone(), dir.join("gone")];
+        write_wav(&music.join("a.wav"), 8000);
+        write_wav(&music.join("b.wav"), 8000);
+        assert_eq!(run_roots(&roots, &db), (2, 2, 0, 1));
+        std::fs::remove_file(music.join("b.wav")).unwrap();
+        assert_eq!(run_roots(&roots, &db), (1, 0, 1, 1));
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
