@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.2.2 — 2026-10-13
+
+Library, playlist and MPRIS fixes.
+
+- Russian tags saved in the old Windows encoding are still repaired, but only
+  in MP3 (ID3) tags and only when the text really looks Cyrillic. Accented
+  Latin names such as "Café" and FLAC/Ogg tags are left alone.
+- Album artist tags get the same cleanup as the other fields.
+- Artists and albums that differ only in letter case, including Cyrillic
+  ("Кино" / "КИНО"), show as one group in the library.
+- A library folder that cannot be read (unmounted drive, missing folder,
+  permission error) or turns up no audio files keeps its tracks, and a scan
+  toast says what went wrong. Before, a rescan could wipe them.
+- Files whose names are not valid UTF-8 are scanned once instead of on every
+  rescan. The library database is upgraded in place on first start; older
+  versions of khz-player cannot open the upgraded database cleanly, and this
+  version refuses a database from a newer one.
+- Rescans no longer hold the database while reading tags, so playlist edits
+  during a scan do not stall.
+- M3U: file names starting with `#`, `file://localhost/` paths, playlists
+  saved in the Windows Cyrillic encoding and Windows drive paths now load.
+  Titles with line breaks export as one line.
+- MPRIS: track URLs are percent-encoded, the position is right after pause
+  and stop, seeking past the end goes to the next track, and Next/Previous/
+  Play/Pause/Seek are advertised only when they can work.
+
 ## 0.2.1 — 2026-10-05
 
 - Sharper app icon at small sizes, such as the 18 px icons in the Omarchy
