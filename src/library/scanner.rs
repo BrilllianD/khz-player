@@ -62,15 +62,26 @@ fn scan(
     let known = db::stamps(&conn)?;
     db::clear_seen(&conn, roots)?;
     let mut updated = 0;
+    // Tags are read before the transaction so the write lock is held only for the inserts.
     for (i, batch) in files.chunks(BATCH).enumerate() {
+        let work: Vec<Option<Track>> = batch
+            .iter()
+            .map(|path| {
+                if known.get(path) == Some(&tags::file_stamp(path)) {
+                    None
+                } else {
+                    Some(tags::read(path))
+                }
+            })
+            .collect();
         let tx = conn.transaction()?;
-        for path in batch {
-            let stamp = tags::file_stamp(path);
-            if known.get(path) == Some(&stamp) {
-                db::mark_seen(&tx, path)?;
-            } else {
-                db::upsert_track(&tx, &tags::read(path))?;
-                updated += 1;
+        for (path, track) in batch.iter().zip(&work) {
+            match track {
+                None => db::mark_seen(&tx, path)?,
+                Some(t) => {
+                    db::upsert_track(&tx, t)?;
+                    updated += 1;
+                }
             }
         }
         tx.commit()?;
