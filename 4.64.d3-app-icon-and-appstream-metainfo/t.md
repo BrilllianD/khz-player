@@ -1,3 +1,3 @@
 # D3: app icon and AppStream metainfo
 
-SVG icon, AppStream metainfo XML, update Icon= in rmp.desktop.
+Icons shipped in 0.2.0. Remaining: AppStream metainfo khz-player.metainfo.xml, installed by scripts/package.sh and install.sh.
