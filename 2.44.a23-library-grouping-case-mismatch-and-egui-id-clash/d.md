@@ -6,3 +6,7 @@ Re-checked against 0.2.1: only the grouping comparison remains.
 
 on it
 
+## 2026-10-13T17:03:07Z — Bronnikov Aleksandr
+
+28924d1: group on cached Unicode-lowercase keys
+
