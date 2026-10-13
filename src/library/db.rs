@@ -210,6 +210,8 @@ pub fn mark_seen(tx: &Transaction<'_>, path: &Path) -> rusqlite::Result<()> {
 
 /// Clears `seen` for tracks under `roots` before a scan.
 pub fn clear_seen(conn: &Connection, roots: &[PathBuf]) -> rusqlite::Result<()> {
+    // Rows left at seen = 0 by an interrupted scan must not be deleted by this scan's prune.
+    conn.execute("UPDATE tracks SET seen = 1 WHERE seen = 0", [])?;
     for root in roots {
         // Range [root + "/", root + "0"): '0' is '/' + 1, so it covers exactly the subtree
         // and uses the primary key index.

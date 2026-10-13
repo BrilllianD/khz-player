@@ -312,4 +312,21 @@ pub(crate) mod tests {
         assert_eq!(run_roots(&roots, &db), (1, 0, 1, 1));
         std::fs::remove_dir_all(dir).unwrap();
     }
+
+    #[test]
+    fn interrupted_scan_does_not_lose_unmounted_root() {
+        let dir = crate::config::test_dir("scan-interrupted");
+        let music = dir.join("music");
+        std::fs::create_dir_all(&music).unwrap();
+        let db = dir.join("lib.db");
+        write_wav(&music.join("a.wav"), 8000);
+        assert_eq!(run_roots(std::slice::from_ref(&music), &db), (1, 1, 0, 0));
+        // An earlier scan stopped right after clear_seen.
+        let conn = db::open(&db).unwrap();
+        db::clear_seen(&conn, std::slice::from_ref(&music)).unwrap();
+        drop(conn);
+        std::fs::remove_dir_all(&music).unwrap();
+        assert_eq!(run_roots(&[music], &db), (1, 0, 0, 1));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
