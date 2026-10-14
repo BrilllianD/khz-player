@@ -186,24 +186,37 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     let searching = !app.library_search.trim().is_empty();
     let mut act: Option<Act> = None;
 
-    ui.horizontal(|ui| {
-        let n = app.library_cache.matches;
-        ui.label(RichText::new(format!("{n} shown")).small().color(theme.text_dim));
-        if searching && n > 0 && ui.small_button("Add all shown").clicked() {
-            act = Some(Act::Add(
-                app.library_cache
-                    .artists
-                    .iter()
-                    .flat_map(|a| a.albums.iter().flat_map(|al| al.tracks.iter().copied()))
-                    .collect(),
-            ));
-        }
-    });
+    // Fixed-height status row: its height must not depend on the match count.
+    const STATUS_H: f32 = 18.0;
+    ui.allocate_ui_with_layout(
+        vec2(ui.available_width(), STATUS_H),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            let n = app.library_cache.matches;
+            ui.label(RichText::new(format!("{n} shown")).small().color(theme.text_dim));
+            let can_add = searching && n > 0;
+            if ui
+                .add_enabled(can_add, egui::Button::new("Add all shown").small())
+                .clicked()
+            {
+                act = Some(Act::Add(
+                    app.library_cache
+                        .artists
+                        .iter()
+                        .flat_map(|a| a.albums.iter().flat_map(|al| al.tracks.iter().copied()))
+                        .collect(),
+                ));
+            }
+        },
+    );
     ui.separator();
 
-    if let Some(a) = tree(ui, &mut app.library_cache, &app.library, searching, &theme) {
-        act = Some(a);
-    }
+    let h = ui.available_height();
+    ui.allocate_ui(vec2(ui.available_width(), h), |ui| {
+        if let Some(a) = tree(ui, &mut app.library_cache, &app.library, searching, &theme) {
+            act = Some(a);
+        }
+    });
 
     match act {
         Some(Act::Add(v)) => app.add_library_tracks(&v, false),
