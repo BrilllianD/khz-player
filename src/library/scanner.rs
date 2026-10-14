@@ -134,7 +134,8 @@ fn scan(
             total,
         });
     }
-    let removed = db::delete_unseen(&conn)?;
+    let mut removed = db::delete_unseen(&conn)?;
+    removed += db::delete_outside_roots(&conn, roots)?;
     let tracks = db::load_tracks(&conn)?;
     tracing::info!(
         "library scan: {total} files, {updated} updated, {removed} removed, {} walk problems in {:.1}s",

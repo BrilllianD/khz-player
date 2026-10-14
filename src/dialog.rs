@@ -10,6 +10,7 @@ use crate::library::tags::AUDIO_EXTENSIONS;
 pub enum Purpose {
     AddFiles,
     AddFolder,
+    LibraryRoot,
 }
 
 #[derive(Debug)]
@@ -41,6 +42,7 @@ pub fn spawn(
             let mut dialog = rfd::FileDialog::new().set_title(match purpose {
                 Purpose::AddFiles => "Add files",
                 Purpose::AddFolder => "Add folder",
+                Purpose::LibraryRoot => "Add library folder",
             });
             if let Some(dir) = start_dir {
                 dialog = dialog.set_directory(dir);
@@ -50,7 +52,7 @@ pub fn spawn(
                     .add_filter("Audio and playlists", &extensions())
                     .add_filter("All files", &["*"])
                     .pick_files(),
-                Purpose::AddFolder => dialog.pick_folders(),
+                Purpose::AddFolder | Purpose::LibraryRoot => dialog.pick_folders(),
             };
             let _ = tx.send(Picked {
                 purpose,

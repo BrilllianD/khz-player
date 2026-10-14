@@ -43,6 +43,13 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     let bsz = vec2(18.0, 14.0);
     let close_r = Rect::from_center_size(pos2(title.right() - 14.0, title.center().y), bsz);
     let min_r = Rect::from_center_size(pos2(title.right() - 36.0, title.center().y), bsz);
+    let gear_r = Rect::from_center_size(pos2(title.right() - 58.0, title.center().y), bsz);
+    if title_button(ui, gear_r, icons.settings, &theme)
+        .on_hover_text("Settings (Ctrl+P)")
+        .clicked()
+    {
+        app.settings_open = true;
+    }
     if title_button(ui, close_r, "x", &theme).clicked() {
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }

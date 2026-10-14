@@ -287,7 +287,7 @@ impl App {
             .theme_watch
             .as_ref()
             .is_some_and(|w| w.changed.try_recv().is_ok());
-        if changed {
+        if changed && self.cfg.follow_omarchy_theme {
             tracing::debug!("theme files changed, reloading");
             let t = Theme::load();
             if t != self.theme {
@@ -338,6 +338,14 @@ impl App {
                 match picked.purpose {
                     Purpose::AddFiles | Purpose::AddFolder if !picked.paths.is_empty() => {
                         self.add_paths(picked.paths, false);
+                    }
+                    Purpose::LibraryRoot => {
+                        for p in picked.paths {
+                            if !self.cfg.library_roots.contains(&p) {
+                                self.cfg.library_roots.push(p);
+                                self.mark_cfg();
+                            }
+                        }
                     }
                     _ => {}
                 }

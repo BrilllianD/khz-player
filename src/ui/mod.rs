@@ -3,6 +3,7 @@ pub mod jump_dialog;
 pub mod library_panel;
 pub mod main_panel;
 pub mod playlist_panel;
+pub mod settings;
 pub mod widgets;
 
 use egui::{Align2, Frame, Id, Margin, Modal, Panel, RichText};
@@ -28,6 +29,7 @@ pub struct Icons {
     pub shuffle: &'static str,
     pub repeat: &'static str,
     pub music: &'static str,
+    pub settings: &'static str,
 }
 
 pub fn icons(nerd: bool) -> Icons {
@@ -42,6 +44,7 @@ pub fn icons(nerd: bool) -> Icons {
             shuffle: "\u{f074}",
             repeat: "\u{f01e}",
             music: "\u{f001}",
+            settings: "\u{f013}",
         }
     } else {
         Icons {
@@ -54,6 +57,7 @@ pub fn icons(nerd: bool) -> Icons {
             shuffle: "⤨",
             repeat: "⟳",
             music: "♪",
+            settings: "⚙",
         }
     }
 }
@@ -108,6 +112,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
 
     prompt_modal(app, &ctx);
     jump_dialog::show(app, &ctx);
+    settings::show(app, &ctx);
     toasts(app, &ctx);
     resize_grip(&ctx, &app.theme);
 }

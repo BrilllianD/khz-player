@@ -208,22 +208,54 @@ pub fn mark_seen(tx: &Transaction<'_>, path: &Path) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Key range `[root + "/", root + "0")`: '0' is '/' + 1, so it covers exactly the subtree
+/// and uses the primary key index.
+fn subtree_range(root: &Path) -> (Vec<u8>, Vec<u8>) {
+    let mut lo = path_bytes(root).to_vec();
+    while lo.len() > 1 && lo.ends_with(b"/") {
+        lo.pop();
+    }
+    if lo != b"/" {
+        lo.push(b'/');
+    }
+    let mut hi = lo.clone();
+    *hi.last_mut().unwrap() = b'0';
+    (lo, hi)
+}
+
+/// Deletes tracks (and their auto-EQ rows) that lie under none of `roots`.
+/// With no roots nothing is deleted.
+pub fn delete_outside_roots(conn: &Connection, roots: &[PathBuf]) -> rusqlite::Result<usize> {
+    if roots.is_empty() {
+        return Ok(0);
+    }
+    let mut cond = String::new();
+    let mut args: Vec<Vec<u8>> = Vec::new();
+    for root in roots {
+        let (lo, hi) = subtree_range(root);
+        if !cond.is_empty() {
+            cond.push_str(" OR ");
+        }
+        cond.push_str(&format!("(path >= ?{} AND path < ?{})", args.len() + 1, args.len() + 2));
+        args.push(lo);
+        args.push(hi);
+    }
+    conn.execute(
+        &format!("DELETE FROM eq_auto WHERE NOT ({cond})"),
+        rusqlite::params_from_iter(args.iter()),
+    )?;
+    conn.execute(
+        &format!("DELETE FROM tracks WHERE NOT ({cond})"),
+        rusqlite::params_from_iter(args.iter()),
+    )
+}
+
 /// Clears `seen` for tracks under `roots` before a scan.
 pub fn clear_seen(conn: &Connection, roots: &[PathBuf]) -> rusqlite::Result<()> {
     // Rows left at seen = 0 by an interrupted scan must not be deleted by this scan's prune.
     conn.execute("UPDATE tracks SET seen = 1 WHERE seen = 0", [])?;
     for root in roots {
-        // Range [root + "/", root + "0"): '0' is '/' + 1, so it covers exactly the subtree
-        // and uses the primary key index.
-        let mut lo = path_bytes(root).to_vec();
-        while lo.len() > 1 && lo.ends_with(b"/") {
-            lo.pop();
-        }
-        if lo != b"/" {
-            lo.push(b'/');
-        }
-        let mut hi = lo.clone();
-        *hi.last_mut().unwrap() = b'0';
+        let (lo, hi) = subtree_range(root);
         conn.execute(
             "UPDATE tracks SET seen = 0 WHERE path >= ?1 AND path < ?2",
             params![lo, hi],
@@ -406,6 +438,20 @@ mod tests {
         );
         clear_seen(&conn, &[PathBuf::from("/")]).unwrap();
         assert_eq!(delete_unseen(&conn).unwrap(), 2);
+    }
+
+    #[test]
+    fn delete_outside_roots_keeps_only_roots() {
+        let mut conn = open_memory().unwrap();
+        let tx = conn.transaction().unwrap();
+        for p in ["/m/a/x.mp3", "/m/ab/y.mp3", "/n/z.mp3"] {
+            upsert_track(&tx, &track(p, "t")).unwrap();
+        }
+        tx.commit().unwrap();
+        assert_eq!(delete_outside_roots(&conn, &[]).unwrap(), 0);
+        assert_eq!(delete_outside_roots(&conn, &[PathBuf::from("/m/a")]).unwrap(), 2);
+        let left: Vec<_> = load_tracks(&conn).unwrap().into_iter().map(|t| t.path).collect();
+        assert_eq!(left, [PathBuf::from("/m/a/x.mp3")]);
     }
 
     #[test]

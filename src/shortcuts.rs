@@ -23,6 +23,7 @@ pub enum Action {
     RemoveSelected,
     PlaySelected,
     SelectAll,
+    Settings,
 }
 
 const BINDINGS: &[(Modifiers, Key, Action)] = &[
@@ -49,6 +50,7 @@ const BINDINGS: &[(Modifiers, Key, Action)] = &[
     (Modifiers::NONE, Key::Delete, Action::RemoveSelected),
     (Modifiers::NONE, Key::Enter, Action::PlaySelected),
     (Modifiers::CTRL, Key::A, Action::SelectAll),
+    (Modifiers::CTRL, Key::P, Action::Settings),
 ];
 
 /// Consumes matching key presses. Call only when no text field has focus.
@@ -94,5 +96,6 @@ mod tests {
         // so the Alt binding has to come first and consume the key.
         assert_eq!(press(Modifiers::ALT, Key::L), [Action::ToggleLibrary]);
         assert_eq!(press(Modifiers::NONE, Key::L), [Action::FocusOpen]);
+        assert_eq!(press(Modifiers::CTRL, Key::P), [Action::Settings]);
     }
 }

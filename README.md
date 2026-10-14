@@ -126,6 +126,11 @@ Useful keys in `config.toml`:
 - `library_roots`: folders to scan (defaults to your music folder).
 - `font_path`: font file to use. khz-player looks for JetBrainsMono Nerd Font by
   default and uses its icons when found.
+- `follow_omarchy_theme`: `true` (default) follows the current Omarchy theme; `false`
+  uses the Winamp colours.
+
+`Ctrl+P` (or the gear in the title bar) opens the settings window, which edits the
+library folders, theme, animation frame rate, remaining-time display and font file.
 
 ## Hyprland
 

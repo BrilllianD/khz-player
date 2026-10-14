@@ -58,6 +58,8 @@ pub struct Config {
     pub show_playlist: bool,
     pub show_library: bool,
     pub time_remaining: bool,
+    /// Use the current Omarchy theme and follow its changes; false = Winamp colours.
+    pub follow_omarchy_theme: bool,
     /// Repaint rate while playing (spectrum, marquee). Each frame costs CPU.
     pub animation_fps: u32,
     pub eq: EqConfig,
@@ -84,6 +86,7 @@ impl Default for Config {
             show_playlist: true,
             show_library: false,
             time_remaining: false,
+            follow_omarchy_theme: true,
             animation_fps: 30,
             eq: EqConfig::default(),
             window: WindowConfig::default(),
@@ -232,6 +235,12 @@ mod tests {
         let back: Config = toml::from_str(&s).unwrap();
         assert_eq!(back.eq.bands[3], 4.5);
         assert_eq!(back.repeat, Repeat::One);
+    }
+
+    #[test]
+    fn old_config_follows_theme() {
+        let c: Config = toml::from_str("volume = 0.5\n").unwrap();
+        assert!(c.follow_omarchy_theme);
     }
 
     #[test]

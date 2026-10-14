@@ -119,6 +119,7 @@ pub struct App {
     pub open_path: String,
     pub focus_open: bool,
     pub prompt: Option<Prompt>,
+    pub settings_open: bool,
     pub jump: Option<JumpState>,
     pub toasts: Vec<(String, Instant)>,
     /// Scroll the playlist to this row on the next frame.
@@ -150,7 +151,7 @@ impl App {
     ) -> Self {
         let ctx = cc.egui_ctx.clone();
         let nerd_font = fonts::install(&ctx, cfg.font_path.as_deref());
-        let theme = Theme::load();
+        let theme = if cfg.follow_omarchy_theme { Theme::load() } else { Theme::winamp() };
         theme.apply(&ctx);
         let theme_watch = theme_watch::start(ctx.clone());
 
@@ -233,6 +234,7 @@ impl App {
             open_path: String::new(),
             focus_open: false,
             prompt: None,
+            settings_open: false,
             jump: None,
             toasts: Vec::new(),
             scroll_to: None,
@@ -295,6 +297,14 @@ impl App {
         self.cfg_changed = Some(now);
     }
 
+    pub fn set_follow_theme(&mut self, on: bool) {
+        self.cfg.follow_omarchy_theme = on;
+        let theme = if on { Theme::load() } else { Theme::winamp() };
+        theme.apply(&self.ctx);
+        self.theme = theme;
+        self.mark_cfg();
+    }
+
     pub fn dispatch(&mut self, ctx: &egui::Context, a: Action) {
         match a {
             Action::Prev => self.prev(),
@@ -343,6 +353,7 @@ impl App {
                 }
             }
             Action::SelectAll => self.playlists[self.active].select_all(),
+            Action::Settings => self.settings_open = true,
         }
     }
 
@@ -369,7 +380,10 @@ impl eframe::App for App {
         self.handle_theme(ctx);
         self.handle_drops(ctx);
 
-        if !ctx.egui_wants_keyboard_input() && self.prompt.is_none() && self.jump.is_none() {
+        if !ctx.egui_wants_keyboard_input() && self.prompt.is_none()
+            && self.jump.is_none()
+            && !self.settings_open
+        {
             for a in shortcuts::collect(ctx) {
                 self.dispatch(ctx, a);
             }
