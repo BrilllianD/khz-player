@@ -197,7 +197,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         _ => 0.0,
     };
     let (sresp, s) = widgets::bar(ui, seek_r, frac, false, &theme);
-    if dur.is_some() && app.now.is_some() {
+    if dur.is_some() && app.now.is_some() && app.state != PlayerState::Stopped {
         if let Some(f) = s {
             app.seek_drag = Some(f);
         }

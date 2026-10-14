@@ -69,12 +69,17 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
 
     if app.cfg.show_library {
-        Panel::right("library")
+        let resp = Panel::right("library")
             .resizable(true)
-            .default_size(LIBRARY_W)
+            .default_size(app.cfg.window.library_w.unwrap_or(LIBRARY_W))
             .min_size(260.0)
             .frame(section_frame(app).inner_margin(Margin::same(4)))
             .show(ui, |ui| library_panel::show(app, ui));
+        let w = resp.response.rect.width().round();
+        if w >= 260.0 && Some(w) != app.cfg.window.library_w {
+            app.cfg.window.library_w = Some(w);
+            app.mark_cfg();
+        }
     }
 
     Panel::top("main")

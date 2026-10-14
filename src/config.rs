@@ -33,8 +33,11 @@ impl Default for EqConfig {
 pub struct WindowConfig {
     pub x: Option<f32>,
     pub y: Option<f32>,
+    /// Width of the main column (player, EQ, playlist), without the library panel.
     pub w: Option<f32>,
     pub h: Option<f32>,
+    /// Width of the library panel.
+    pub library_w: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -172,7 +175,9 @@ impl Config {
         for b in &mut self.eq.bands {
             *b = in_range(*b, -max, max, 0.0);
         }
-        self.window.h = self.window.h.filter(|h| h.is_finite() && *h > 0.0);
+        for v in [&mut self.window.w, &mut self.window.h, &mut self.window.library_w] {
+            *v = v.filter(|x| x.is_finite() && *x > 0.0);
+        }
     }
 }
 
@@ -269,5 +274,16 @@ mod tests {
         assert_eq!(c.eq.preamp, 12.0);
         assert_eq!(c.eq.bands[0], -12.0);
         assert_eq!(c.eq.bands[9], 0.0);
+    }
+
+    #[test]
+    fn bad_window_widths_load_as_none() {
+        let dir = test_dir("config-window-w");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[window]\nw = -5.0\nlibrary_w = nan\n").unwrap();
+        let (c, err) = Config::load_from(&path);
+        assert!(err.is_none());
+        assert_eq!(c.window.w, None);
+        assert_eq!(c.window.library_w, None);
     }
 }

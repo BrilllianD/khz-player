@@ -144,7 +144,8 @@ pub struct App {
 }
 
 pub fn window_size(cfg: &Config) -> egui::Vec2 {
-    let w = ui::MAIN_W + if cfg.show_library { ui::LIBRARY_W } else { 0.0 };
+    let main_w = cfg.window.w.map_or(ui::MAIN_W, |w| w.max(ui::MAIN_W));
+    let w = main_w + if cfg.show_library { cfg.window.library_w.unwrap_or(ui::LIBRARY_W).max(260.0) } else { 0.0 };
     let mut h = ui::MAIN_H;
     if cfg.show_eq {
         h += ui::EQ_H;
@@ -439,11 +440,30 @@ impl App {
         self.cfg.eq.preset = p.name.clone();
         self.push_eq();
         self.mark_cfg();
+        self.remember_auto(Some(&p.name));
+    }
+
+    /// With AUTO on, stores (or with `None` drops) the playing track's preset mapping.
+    fn remember_auto(&self, preset: Option<&str>) {
         if self.cfg.eq.auto
             && let (Some(db), Some(now)) = (&self.db, &self.now)
-            && let Err(e) = db::eq_auto_set(db, &now.path, Some(&p.name))
+            && let Err(e) = db::eq_auto_set(db, &now.path, preset)
         {
             tracing::warn!("eq auto: {e}");
+        }
+    }
+
+    /// A slider tweak: the curve no longer matches a named preset, so the
+    /// track's mapping goes (one DB write per tweak sequence, not per frame).
+    pub fn set_eq_curve(&mut self, preamp: f32, bands: [f32; crate::config::BANDS]) {
+        let had_preset = !self.cfg.eq.preset.is_empty();
+        self.cfg.eq.preamp = preamp;
+        self.cfg.eq.bands = bands;
+        self.cfg.eq.preset.clear();
+        self.push_eq();
+        self.mark_cfg();
+        if had_preset {
+            self.remember_auto(None);
         }
     }
 
@@ -469,8 +489,9 @@ impl App {
             Some(u) => *u = p,
             None => self.user_presets.push(p),
         }
-        self.cfg.eq.preset = name;
+        self.cfg.eq.preset = name.clone();
         self.mark_cfg();
+        self.remember_auto(Some(&name));
         if let Err(e) = eq_presets::save_user(&self.user_presets) {
             self.toast(format!("Cannot save presets: {e}"));
         }
@@ -480,6 +501,17 @@ impl App {
         self.user_presets.retain(|p| p.name != name);
         if let Err(e) = eq_presets::save_user(&self.user_presets) {
             self.toast(format!("Cannot save presets: {e}"));
+        }
+        if !self.builtin_presets.iter().any(|p| p.name == name) {
+            if let Some(db) = &self.db
+                && let Err(e) = db::eq_auto_forget_preset(db, name)
+            {
+                tracing::warn!("eq auto: {e}");
+            }
+            if self.cfg.eq.preset == name {
+                self.cfg.eq.preset.clear();
+                self.mark_cfg();
+            }
         }
     }
 
@@ -1201,6 +1233,16 @@ impl App {
             self.cfg.window.h = Some(h);
             self.mark_cfg();
         }
+        let lib_w = if self.cfg.show_library {
+            self.cfg.window.library_w.unwrap_or(ui::LIBRARY_W).max(260.0)
+        } else {
+            0.0
+        };
+        let main_w = ctx.content_rect().width().round() - lib_w;
+        if self.cfg.window.w != Some(main_w) && main_w >= ui::MAIN_W {
+            self.cfg.window.w = Some(main_w);
+            self.mark_cfg();
+        }
     }
 }
 
@@ -1303,5 +1345,18 @@ mod tests {
         // Changes every 500 ms never go quiet, but the cap saves at 10 s.
         assert!(!should_save(Some(t0), Some(ms(9500)), ms(9900)));
         assert!(should_save(Some(t0), Some(ms(9500)), ms(10_000)));
+    }
+
+    #[test]
+    fn window_size_uses_saved_widths() {
+        let mut cfg = Config { show_library: true, ..Config::default() };
+        assert_eq!(window_size(&cfg).x, ui::MAIN_W + ui::LIBRARY_W);
+        cfg.window.w = Some(700.0);
+        cfg.window.library_w = Some(300.0);
+        assert_eq!(window_size(&cfg).x, 1000.0);
+        cfg.window.w = Some(100.0);
+        assert_eq!(window_size(&cfg).x, ui::MAIN_W + 300.0);
+        cfg.show_library = false;
+        assert_eq!(window_size(&cfg).x, ui::MAIN_W);
     }
 }

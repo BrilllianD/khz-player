@@ -233,6 +233,7 @@ pub fn clear_seen(conn: &Connection, roots: &[PathBuf]) -> rusqlite::Result<()> 
 }
 
 pub fn delete_unseen(conn: &Connection) -> rusqlite::Result<usize> {
+    conn.execute("DELETE FROM eq_auto WHERE path IN (SELECT path FROM tracks WHERE seen = 0)", [])?;
     conn.execute("DELETE FROM tracks WHERE seen = 0", [])
 }
 
@@ -317,6 +318,11 @@ pub fn eq_auto_get(conn: &Connection, path: &Path) -> rusqlite::Result<Option<St
         |r| r.get(0),
     )
     .optional()
+}
+
+/// Drops every track mapping that points to `preset`.
+pub fn eq_auto_forget_preset(conn: &Connection, preset: &str) -> rusqlite::Result<usize> {
+    conn.execute("DELETE FROM eq_auto WHERE preset = ?1", [preset])
 }
 
 pub fn eq_auto_set(conn: &Connection, path: &Path, preset: Option<&str>) -> rusqlite::Result<()> {
@@ -501,5 +507,34 @@ mod tests {
         assert_eq!(eq_auto_get(&conn, p).unwrap().as_deref(), Some("Pop"));
         eq_auto_set(&conn, p, None).unwrap();
         assert_eq!(eq_auto_get(&conn, p).unwrap(), None);
+    }
+
+    #[test]
+    fn eq_auto_forget_preset_removes_only_that_preset() {
+        let conn = open_memory().unwrap();
+        let (a, b) = (Path::new("/m/a.mp3"), Path::new("/m/b.mp3"));
+        eq_auto_set(&conn, a, Some("Rock")).unwrap();
+        eq_auto_set(&conn, b, Some("Pop")).unwrap();
+        assert_eq!(eq_auto_forget_preset(&conn, "Rock").unwrap(), 1);
+        assert_eq!(eq_auto_get(&conn, a).unwrap(), None);
+        assert_eq!(eq_auto_get(&conn, b).unwrap().as_deref(), Some("Pop"));
+    }
+
+    #[test]
+    fn delete_unseen_drops_eq_auto_rows() {
+        let mut conn = open_memory().unwrap();
+        let tx = conn.transaction().unwrap();
+        upsert_track(&tx, &track("/m/a.mp3", "A")).unwrap();
+        upsert_track(&tx, &track("/m/b.mp3", "B")).unwrap();
+        tx.commit().unwrap();
+        eq_auto_set(&conn, Path::new("/m/a.mp3"), Some("Rock")).unwrap();
+        eq_auto_set(&conn, Path::new("/m/b.mp3"), Some("Pop")).unwrap();
+        clear_seen(&conn, &[PathBuf::from("/m")]).unwrap();
+        let tx = conn.transaction().unwrap();
+        mark_seen(&tx, Path::new("/m/b.mp3")).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(delete_unseen(&conn).unwrap(), 1);
+        assert_eq!(eq_auto_get(&conn, Path::new("/m/a.mp3")).unwrap(), None);
+        assert_eq!(eq_auto_get(&conn, Path::new("/m/b.mp3")).unwrap().as_deref(), Some("Pop"));
     }
 }

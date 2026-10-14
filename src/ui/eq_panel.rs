@@ -75,7 +75,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                             }
                             ui.separator();
                         }
-                        for p in &app.builtin_presets {
+                        for p in app.builtin_presets.iter().filter(|b| !app.user_presets.iter().any(|u| u.name == b.name)) {
                             if ui.selectable_label(app.cfg.eq.preset == p.name, &p.name).clicked() {
                                 chosen = Some(p.clone());
                             }
@@ -147,7 +147,6 @@ pub fn show(app: &mut App, ui: &mut Ui) {
 
     let mut preamp = app.cfg.eq.preamp;
     if slider_at(ui, body.left(), &mut preamp, "PRE", theme.text_bright) {
-        app.cfg.eq.preamp = preamp;
         changed = true;
     }
     let mut bands = app.cfg.eq.bands;
@@ -158,10 +157,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         }
     }
     if changed {
-        app.cfg.eq.bands = bands;
-        app.cfg.eq.preset.clear();
-        app.push_eq();
-        app.mark_cfg();
+        app.set_eq_curve(preamp, bands);
     }
 
     // dB scale labels.
