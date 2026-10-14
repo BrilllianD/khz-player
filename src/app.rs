@@ -1073,6 +1073,10 @@ impl App {
                 MprisAction::Repeat(r) => self.set_repeat(r),
                 MprisAction::Raise => ctx.send_viewport_cmd(egui::ViewportCommand::Focus),
                 MprisAction::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                MprisAction::OpenUri(uri) => match mpris::path_from_file_url(&uri) {
+                    Some(p) => self.add_paths(vec![p], false),
+                    None => self.toast(format!("Cannot open {uri}: only local files are supported")),
+                },
             }
         }
         if self.state == PlayerState::Playing

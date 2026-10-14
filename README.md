@@ -146,6 +146,9 @@ hl.window_rule({ match = { class = "^(khz-player)$" }, float = true, size = { 56
 
 khz-player registers as `org.mpris.MediaPlayer2.khz-player`.
 
+Running `khz-player FILE…` while it is already open adds the files to the current
+playlist of the running window.
+
 ```sh
 playerctl -p khz-player play-pause
 busctl --user call org.mpris.MediaPlayer2.khz-player /org/mpris/MediaPlayer2 \

@@ -1,7 +1,8 @@
 //! MPRIS D-Bus service on its own thread (mpris-server's Player is !Send).
 
-use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
+use std::ffi::OsString;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender};
@@ -9,6 +10,9 @@ use mpris_server::{LoopStatus, Metadata, PlaybackStatus, Player, Time, TrackId};
 
 use crate::audio::PlayerState;
 use crate::playlist::Repeat;
+
+/// Well-known bus name of the running player; also the single-instance lock.
+pub const BUS_NAME: &str = "org.mpris.MediaPlayer2.khz-player";
 
 #[derive(Debug, Clone)]
 pub enum MprisAction {
@@ -27,6 +31,8 @@ pub enum MprisAction {
     Repeat(Repeat),
     Raise,
     Quit,
+    /// `file://` URL forwarded by a second `khz-player FILE` invocation.
+    OpenUri(String),
 }
 
 #[derive(Debug, Clone)]
@@ -99,6 +105,80 @@ fn file_url(path: &Path) -> String {
         }
     }
     url
+}
+
+/// Inverse of `file_url`: local `file://` URL (empty or `localhost` host) to a path.
+pub fn path_from_file_url(url: &str) -> Option<PathBuf> {
+    let rest = url.strip_prefix("file://")?;
+    let rest = rest.strip_prefix("localhost").unwrap_or(rest);
+    if !rest.starts_with('/') {
+        return None;
+    }
+    let b = rest.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            let hex = std::str::from_utf8(b.get(i + 1..i + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    Some(PathBuf::from(OsString::from_vec(out)))
+}
+
+/// Outcome of handing the command line to an already running instance.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Forward {
+    NotRunning,
+    Forwarded,
+    Failed(String),
+}
+
+/// If a player owns `BUS_NAME`, enqueue `args` there (or raise its window when empty).
+pub fn forward_to_running(args: &[PathBuf]) -> Forward {
+    use mpris_server::zbus::{Connection, fdo::DBusProxy};
+    futures_lite::future::block_on(async {
+        let Ok(conn) = Connection::session().await else {
+            return Forward::NotRunning;
+        };
+        let Ok(name) = BUS_NAME.try_into() else {
+            return Forward::NotRunning;
+        };
+        let Ok(bus) = DBusProxy::new(&conn).await else {
+            return Forward::NotRunning;
+        };
+        if !bus.name_has_owner(name).await.unwrap_or(false) {
+            return Forward::NotRunning;
+        }
+        let path = "/org/mpris/MediaPlayer2";
+        let r: mpris_server::zbus::Result<()> = async {
+            if args.is_empty() {
+                conn.call_method(Some(BUS_NAME), path, Some("org.mpris.MediaPlayer2"), "Raise", &())
+                    .await?;
+            }
+            for a in args {
+                let abs = std::path::absolute(a).unwrap_or_else(|_| a.clone());
+                conn.call_method(
+                    Some(BUS_NAME),
+                    path,
+                    Some("org.mpris.MediaPlayer2.Player"),
+                    "OpenUri",
+                    &(file_url(&abs),),
+                )
+                .await?;
+            }
+            Ok(())
+        }
+        .await;
+        match r {
+            Ok(()) => Forward::Forwarded,
+            Err(e) => Forward::Failed(e.to_string()),
+        }
+    })
 }
 
 fn set_position_ok(current: Option<&TrackId>, len: Option<Time>, req: &TrackId, pos: Time) -> bool {
@@ -193,8 +273,10 @@ async fn serve(
         });
         let s = send.clone();
         player.connect_raise(move |_| s(MprisAction::Raise));
-        let s = send;
+        let s = send.clone();
         player.connect_quit(move |_| s(MprisAction::Quit));
+        let s = send;
+        player.connect_open_uri(move |_, uri| s(MprisAction::OpenUri(uri.to_string())));
     }
 
     let update_loop = async {
@@ -282,6 +364,30 @@ mod tests {
     fn file_url_encodes_non_utf8_bytes() {
         let p = Path::new(std::ffi::OsStr::from_bytes(b"/m/\xFF.mp3"));
         assert_eq!(file_url(p), "file:///m/%FF.mp3");
+    }
+
+    #[test]
+    fn file_url_round_trips() {
+        for p in ["/m/a b/Кино #1%.mp3", "/a/%25 b.mp3"] {
+            assert_eq!(path_from_file_url(&file_url(Path::new(p))), Some(PathBuf::from(p)));
+        }
+        let raw = Path::new(std::ffi::OsStr::from_bytes(b"/m/\xFF.mp3"));
+        assert_eq!(path_from_file_url(&file_url(raw)).as_deref(), Some(raw));
+    }
+
+    #[test]
+    fn path_from_localhost_url() {
+        assert_eq!(
+            path_from_file_url("file://localhost/a/b.mp3"),
+            Some(PathBuf::from("/a/b.mp3"))
+        );
+    }
+
+    #[test]
+    fn path_from_url_rejects_remote_and_relative() {
+        for u in ["http://x/a.mp3", "file://host/a.mp3", "file://a.mp3", "file:///a%2"] {
+            assert_eq!(path_from_file_url(u), None, "{u}");
+        }
     }
 
     #[test]

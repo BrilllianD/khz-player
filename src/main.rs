@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use khz_player::{app, config, ui};
+use khz_player::{app, config, mpris, ui};
 use tracing_subscriber::EnvFilter;
 
 fn main() -> eframe::Result {
@@ -12,6 +12,14 @@ fn main() -> eframe::Result {
         .init();
 
     let args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
+    match mpris::forward_to_running(&args) {
+        mpris::Forward::Forwarded => return Ok(()),
+        mpris::Forward::Failed(e) => {
+            eprintln!("khz-player: cannot reach the running instance: {e}");
+            std::process::exit(1);
+        }
+        mpris::Forward::NotRunning => {}
+    }
     config::migrate_legacy_dirs();
     let (cfg, cfg_error) = config::Config::load();
     let size = app::window_size(&cfg);
