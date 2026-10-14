@@ -230,7 +230,18 @@ async fn serve(
         .can_raise(true)
         .can_quit(true)
         .supported_uri_schemes(["file"])
-        .supported_mime_types(["audio/mpeg", "audio/flac", "audio/ogg", "audio/mp4", "audio/x-wav"])
+        .supported_mime_types([
+            "audio/mpeg",
+            "audio/flac",
+            "audio/x-flac",
+            "audio/ogg",
+            "audio/x-vorbis+ogg",
+            "audio/mp4",
+            "audio/aac",
+            "audio/x-m4a",
+            "audio/x-aiff",
+            "audio/x-wav",
+        ])
         .build()
         .await?;
 
