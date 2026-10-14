@@ -182,7 +182,7 @@ Scanner: clear `seen`, set per visit, delete `seen=0`. Playlist item metadata re
 ## Phases (each ends runnable)
 
 1. **Skeleton + theme + fonts**: Cargo.toml, main/app/config/theme/theme_watch/fonts, static ui/mod.rs with all panels and dummy values, title strip drag/close.
-2. **Audio one file**: audio/{shared,decoder,resample,output,engine,mod}; open-path TextEdit + L; play/pause/stop/seek; digits; kbps/kHz.
+2. **Audio one file**: audio/{shared,decoder,resample,output,engine,mod}; open-path TextEdit + L (removed in 0.3.0; L opens the file dialog); play/pause/stop/seek; digits; kbps/kHz.
 3. **Playlist**: playlist.rs, m3u.rs, db.rs (playlist tables), playlist_panel; prev/next/shuffle/repeat; gapless prefetch; auto-advance; drag-drop (`i.raw.dropped_files`); tabs CRUD; M3U import/export; persist.
 4. **EQ**: dsp.rs, eq_presets.rs, eq_panel, DspParams atomics.
 5. **Spectrum + marquee**: spectrum.rs, callback tap, widgets.

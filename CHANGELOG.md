@@ -6,7 +6,9 @@ File dialogs, a settings window, one player per session, and no more freezes
 when adding big folders.
 
 - "Add files…" and "Add folder…" in the ADD menu (and the eject button) open
-  the desktop's file picker. Typing a path (`L`) and drag and drop still work.
+  the desktop's file picker, and so does `L`. The path field under the
+  transport buttons is gone; ADD > "Type a path…" still takes a typed path,
+  and drag and drop still works.
 - Adding a folder or an M3U list no longer freezes the window: tracks appear
   in batches while the folder is read, and the playlist footer says
   "adding…" until it is done. Tags of files outside the library are now
@@ -27,7 +29,7 @@ when adding big folders.
 - The seek bar is inactive while stopped.
 - The window width and the library panel width are remembered.
 - Dropping tracks below the last playlist row moves them to the end.
-- Typing in the library search no longer makes the panel jump.
+- The Jump to file window (`J`) keeps its size while you type.
 
 ## 0.2.2 — 2026-10-13
 

@@ -103,8 +103,8 @@ newer glibc.
 - Scroll over the volume bar to change volume; double-click the balance bar to center it.
 - Drag the title strip to move the window.
 - Drop files or folders onto the window to add them. Wayland drag and drop
-  may not work under every compositor; the file dialog (`L`, eject button), ADD > "Type a path…" and the
-  library always do.
+  may not work under every compositor; the file dialog (`L`, eject button),
+  ADD > "Type a path…" and the library always do.
 
 The playlist footer menus hold the rest: ADD, REM (remove missing files,
 duplicates by path or by tags), SEL, MISC (sort, reverse, randomize) and LIST
