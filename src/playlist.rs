@@ -653,6 +653,15 @@ mod tests {
     }
 
     #[test]
+    fn move_selected_to_end() {
+        let mut p = pl(4);
+        p.selected = [0].into();
+        assert!(p.move_selected(4));
+        assert_eq!(names(&p), ["1", "2", "3", "0"]);
+        assert_eq!(p.selected, [3].into());
+    }
+
+    #[test]
     fn move_selected_block_keeps_order_and_current() {
         let mut p = pl(6);
         p.current = Some(4);

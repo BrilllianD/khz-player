@@ -199,9 +199,9 @@ fn rows(app: &mut App, ui: &mut Ui) {
             }
             if dragging
                 && let Some(pos) = pointer
-                && (rect.top()..rect.bottom()).contains(&pos.y)
+                && let Some(gap) =
+                    drop_gap_at(pos.y, i, n, rect.top(), rect.bottom(), ui.clip_rect().bottom())
             {
-                let gap = if pos.y < rect.center().y { i } else { i + 1 };
                 let y = if gap == i { rect.top() } else { rect.bottom() };
                 p.hline(rect.x_range(), y, egui::Stroke::new(2.0, theme.accent));
                 drop_gap = Some(gap);
@@ -289,6 +289,19 @@ fn rows(app: &mut App, ui: &mut Ui) {
     }
     if remove_ctx {
         app.remove_selected();
+    }
+}
+
+/// Drop gap for pointer `y` over row `i` of `n` (`top..bottom`); the last row also owns the space down to `list_bottom`.
+fn drop_gap_at(y: f32, i: usize, n: usize, top: f32, bottom: f32, list_bottom: f32) -> Option<usize> {
+    if y >= top && y < (top + bottom) / 2.0 {
+        Some(i)
+    } else if y >= (top + bottom) / 2.0 && y < bottom {
+        Some(i + 1)
+    } else if i + 1 == n && y >= bottom && y <= list_bottom {
+        Some(n)
+    } else {
+        None
     }
 }
 
@@ -484,6 +497,16 @@ fn footer(app: &mut App, ui: &mut Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drop_gap_at_rows_and_below_last() {
+        // Row 2 of 3 spans 34..51, list ends at 100.
+        assert_eq!(drop_gap_at(36.0, 2, 3, 34.0, 51.0, 100.0), Some(2));
+        assert_eq!(drop_gap_at(45.0, 2, 3, 34.0, 51.0, 100.0), Some(3));
+        assert_eq!(drop_gap_at(80.0, 2, 3, 34.0, 51.0, 100.0), Some(3));
+        assert_eq!(drop_gap_at(80.0, 1, 3, 17.0, 34.0, 100.0), None);
+        assert_eq!(drop_gap_at(101.0, 2, 3, 34.0, 51.0, 100.0), None);
+    }
 
     #[test]
     fn scroll_target_only_when_out_of_view() {
