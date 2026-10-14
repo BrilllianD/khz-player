@@ -131,7 +131,7 @@ Drain tap into rolling 2048-sample buffer; Hann; realfft; 20 log bands 50 Hz–1
 ## UI layout (logical points, Winamp 275×116 ≈ ×2)
 
 ```
-Main 560×232 (always)
+Main 560×206 (always)
   title strip 560×20 "kHz" + [_][x]; drag -> ViewportCommand::StartDrag, close -> Close
   [digits 180×60 "-02:34"] [marquee 340×20 title]
                            [spectrum 340×60, 20 bars]
@@ -143,7 +143,7 @@ Playlist 560×fill min 200 (toggle Alt+E / PL): tabs [Default][Rock][+]; ScrollA
   "1. Artist - Title   3:45"; [ADD v][REM v][SEL v][MISC v][LIST v]  total
 Library SidePanel::right 420 (Alt+L): search, rescan + ProgressBar, Artist > Album > Track tree
 ```
-Viewport: `with_inner_size([560,760]).with_min_inner_size([560,232]).with_decorations(false).with_app_id("khz-player")`. Resize on panel toggle via `ViewportCommand::InnerSize` (floating only). Layout fluid so tiled also works. Document Hyprland float rule for user.
+Viewport: `with_inner_size([560,760]).with_min_inner_size([560,206]).with_decorations(false).with_app_id("khz-player")`. Resize on panel toggle via `ViewportCommand::InnerSize` (floating only). Layout fluid so tiled also works. Document Hyprland float rule for user.
 
 Stock egui: Slider (seek/vol/bal/`Slider::vertical()` EQ), Button, SelectableLabel, ComboBox, ScrollArea, CollapsingHeader, TextEdit, menu_button, ProgressBar. Custom paint via `allocate_painter`: digits (monospace 40pt), marquee (clipped galley, 40 px/s), spectrum bars (gradient lo→hi, 2px peak line), LED toggles. Style: `Visuals::dark()` + overrides, `CornerRadius::ZERO`, tight spacing → flat Winamp look.
 
@@ -159,7 +159,7 @@ Omarchy mapping: bg=background, bg_dark=dark_background, bg_darker=darker_backgr
 Watch parent `~/.local/state/omarchy/current/` NonRecursive (symlink swapped atomically); re-resolve path on each reload.
 
 ### Shortcuts (only when `!ctx.wants_keyboard_input()`)
-Z prev, X play, C pause, V stop, B next, Space toggle, L focus open-path field, J jump dialog, Left/Right ±5 s, Up/Down vol ±2%, R repeat cycle Off/All/One, S shuffle, Alt+G EQ, Alt+E playlist, Alt+L library, Delete remove selected, Enter play selected, Ctrl+A select all.
+Z prev, X play, C pause, V stop, B next, Space toggle, L add files (file dialog), J jump dialog, Left/Right ±5 s, Up/Down vol ±2%, R repeat cycle Off/All/One, S shuffle, Alt+G EQ, Alt+E playlist, Alt+L library, Delete remove selected, Enter play selected, Ctrl+A select all.
 
 ## Persistence
 

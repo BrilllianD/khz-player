@@ -241,7 +241,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             actions.push(Action::Next);
         }
         ui.add_space(6.0);
-        if widgets::button(ui, vec2(28.0, 22.0), icons.eject, false, &theme).on_hover_text("Add files… (L: type a path)").clicked() {
+        if widgets::button(ui, vec2(28.0, 22.0), icons.eject, false, &theme).on_hover_text("Add files… (L)").clicked() {
             open_files = true;
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -260,31 +260,6 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 actions.push(Action::ToggleShuffle);
             }
         });
-    });
-
-    // --- open path field -----------------------------------------------------
-    let open_y = tr_y + 30.0;
-    let open_r = Rect::from_min_max(pos2(x0, open_y), pos2(x1, open_y + 20.0));
-    ui.scope_builder(egui::UiBuilder::new().max_rect(open_r).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
-        let te = ui.add(
-            egui::TextEdit::singleline(&mut app.open_path)
-                .hint_text("Open file / folder / .m3u — Enter adds, Shift+Enter adds & plays")
-                .font(FontId::monospace(11.0))
-                .desired_width(f32::INFINITY)
-                .id(Id::new("open-path")),
-        );
-        if app.focus_open {
-            te.request_focus();
-            app.focus_open = false;
-        }
-        if te.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-            let text = app.open_path.trim().to_string();
-            if !text.is_empty() {
-                let play = ui.input(|i| i.modifiers.shift);
-                app.add_paths(vec![std::path::PathBuf::from(&text)], play);
-                app.open_path.clear();
-            }
-        }
     });
 
     for a in toggle_actions.into_iter().chain(actions) {

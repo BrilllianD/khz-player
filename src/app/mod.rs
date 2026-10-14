@@ -116,8 +116,6 @@ pub struct App {
     pub builtin_presets: Vec<Preset>,
     pub user_presets: Vec<Preset>,
 
-    pub open_path: String,
-    pub focus_open: bool,
     pub prompt: Option<Prompt>,
     pub settings_open: bool,
     pub jump: Option<JumpState>,
@@ -231,8 +229,6 @@ impl App {
             mpris,
             last_mpris_pos: Instant::now(),
             mpris_caps: None,
-            open_path: String::new(),
-            focus_open: false,
             prompt: None,
             settings_open: false,
             jump: None,
@@ -340,7 +336,7 @@ impl App {
                 self.cfg.show_library = !self.cfg.show_library;
                 self.resize_window(ctx);
             }
-            Action::FocusOpen => self.focus_open = true,
+            Action::AddFiles => self.open_dialog(Purpose::AddFiles),
             Action::Jump => {
                 self.jump = Some(JumpState {
                     focus: true,

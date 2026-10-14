@@ -11,7 +11,7 @@ use egui::{Align2, Frame, Id, Margin, Modal, Panel, RichText};
 use crate::app::{App, PromptKind};
 
 pub const MAIN_W: f32 = 560.0;
-pub const MAIN_H: f32 = 232.0;
+pub const MAIN_H: f32 = 206.0;
 pub const EQ_H: f32 = 200.0;
 pub const PLAYLIST_H: f32 = 330.0;
 pub const PLAYLIST_MIN_H: f32 = 200.0;

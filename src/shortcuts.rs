@@ -18,7 +18,7 @@ pub enum Action {
     ToggleEq,
     TogglePlaylist,
     ToggleLibrary,
-    FocusOpen,
+    AddFiles,
     Jump,
     RemoveSelected,
     PlaySelected,
@@ -45,7 +45,7 @@ const BINDINGS: &[(Modifiers, Key, Action)] = &[
     (Modifiers::ALT, Key::G, Action::ToggleEq),
     (Modifiers::ALT, Key::E, Action::TogglePlaylist),
     (Modifiers::ALT, Key::L, Action::ToggleLibrary),
-    (Modifiers::NONE, Key::L, Action::FocusOpen),
+    (Modifiers::NONE, Key::L, Action::AddFiles),
     (Modifiers::NONE, Key::J, Action::Jump),
     (Modifiers::NONE, Key::Delete, Action::RemoveSelected),
     (Modifiers::NONE, Key::Enter, Action::PlaySelected),
@@ -95,7 +95,7 @@ mod tests {
         // Alt+L must not also count as a plain L: Alt is ignored when matching,
         // so the Alt binding has to come first and consume the key.
         assert_eq!(press(Modifiers::ALT, Key::L), [Action::ToggleLibrary]);
-        assert_eq!(press(Modifiers::NONE, Key::L), [Action::FocusOpen]);
+        assert_eq!(press(Modifiers::NONE, Key::L), [Action::AddFiles]);
         assert_eq!(press(Modifiers::CTRL, Key::P), [Action::Settings]);
     }
 }

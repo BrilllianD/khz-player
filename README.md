@@ -87,7 +87,7 @@ newer glibc.
 | `↑` `↓`, `+` `-` | Volume up / down |
 | `R` | Cycle repeat (off, all, one) |
 | `S` | Toggle shuffle |
-| `L` | Focus the open-path field (file, folder or `.m3u`) |
+| `L` | Add files (opens the file dialog) |
 | `J` | Jump to a track by name |
 | `Enter` | Play the selected track |
 | `Del` | Remove selected tracks |
@@ -103,7 +103,7 @@ newer glibc.
 - Scroll over the volume bar to change volume; double-click the balance bar to center it.
 - Drag the title strip to move the window.
 - Drop files or folders onto the window to add them. Wayland drag and drop
-  may not work under every compositor; the open-path field (`L`) and the
+  may not work under every compositor; the file dialog (`L`, eject button), ADD > "Type a path…" and the
   library always do.
 
 The playlist footer menus hold the rest: ADD, REM (remove missing files,
