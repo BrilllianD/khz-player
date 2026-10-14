@@ -63,7 +63,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         }
         egui::ScrollArea::vertical()
             .max_height(360.0)
-            .auto_shrink([false, true])
+            .min_scrolled_height(360.0)
+            .auto_shrink([false, false])
             .show(ui, |ui| {
                 for (n, &i) in hits.iter().enumerate() {
                     let t = &pl.tracks[i];
