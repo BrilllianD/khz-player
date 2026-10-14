@@ -1,0 +1,41 @@
+name: CI
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev pkg-config
+      - name: Toolchain version
+        id: rust
+        run: echo "version=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.rust.outputs.version }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked
+      - run: cargo clippy --all-targets --locked -- -D warnings
+  package:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches Cargo.toml version
+        run: test "${GITHUB_REF_NAME#v}" = "$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+      - run: scripts/package.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: khz-player-${{ github.ref_name }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
