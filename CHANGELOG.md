@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.3.0 — 2026-10-14
+
+File dialogs, a settings window, one player per session, and no more freezes
+when adding big folders.
+
+- "Add files…" and "Add folder…" in the ADD menu (and the eject button) open
+  the desktop's file picker. Typing a path (`L`) and drag and drop still work.
+- Adding a folder or an M3U list no longer freezes the window: tracks appear
+  in batches while the folder is read, and the playlist footer says
+  "adding…" until it is done. Tags of files outside the library are now
+  filled in at startup even when the library is empty.
+- Settings window (`Ctrl+P` or the gear in the title bar): library folders
+  (add, remove, rescan), follow the Omarchy theme or use the Winamp colours,
+  animation frame rate, remaining-time display, and font file (applies after
+  restart). Removing a library folder drops its tracks from the library on
+  the next rescan; playlists are not touched.
+- Running `khz-player FILE…` while the player is open adds the files to the
+  current playlist of the running window and raises it instead of starting a
+  second player. The desktop file now offers khz-player for all supported
+  audio types and for folders.
+- EQ AUTO: saving or picking a preset remembers it for the playing track;
+  moving a slider with AUTO on forgets that track's preset; deleting a user
+  preset forgets the tracks that used it. A user preset with the same name as
+  a built-in one replaces it in the list.
+- The seek bar is inactive while stopped.
+- The window width and the library panel width are remembered.
+- Dropping tracks below the last playlist row moves them to the end.
+- Typing in the library search no longer makes the panel jump.
+
 ## 0.2.2 — 2026-10-13
 
 Library, playlist and MPRIS fixes.
