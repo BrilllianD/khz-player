@@ -28,6 +28,7 @@ mpris-server = "0.10"
 futures-lite = "2"
 async-channel = "2"
 rand = "0.9"
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 anyhow = "1"
 thiserror = "2"
 tracing = "0.1"

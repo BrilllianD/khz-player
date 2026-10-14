@@ -7,6 +7,7 @@ use egui::{Align2, FontId, Id, Rect, Sense, Ui, pos2, vec2};
 use super::widgets;
 use crate::app::App;
 use crate::audio::{Command, PlayerState};
+use crate::dialog::Purpose;
 use crate::library::format_duration;
 use crate::shortcuts::Action;
 
@@ -213,6 +214,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     let tr_y = seek_y + 22.0;
     let tr = Rect::from_min_max(pos2(x0, tr_y), pos2(x1, tr_y + 24.0));
     let mut actions = Vec::new();
+    let mut open_files = false;
     ui.scope_builder(egui::UiBuilder::new().max_rect(tr).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         let sz = vec2(34.0, 22.0);
@@ -232,8 +234,8 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             actions.push(Action::Next);
         }
         ui.add_space(6.0);
-        if widgets::button(ui, vec2(28.0, 22.0), icons.eject, false, &theme).on_hover_text("Open (L)").clicked() {
-            actions.push(Action::FocusOpen);
+        if widgets::button(ui, vec2(28.0, 22.0), icons.eject, false, &theme).on_hover_text("Add files… (L: type a path)").clicked() {
+            open_files = true;
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 3.0;
@@ -280,6 +282,9 @@ pub fn show(app: &mut App, ui: &mut Ui) {
 
     for a in toggle_actions.into_iter().chain(actions) {
         app.dispatch(&ctx, a);
+    }
+    if open_files {
+        app.open_dialog(Purpose::AddFiles);
     }
 }
 

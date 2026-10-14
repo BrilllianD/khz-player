@@ -8,6 +8,7 @@ use rusqlite::Connection;
 use crate::audio::spectrum::Spectrum;
 use crate::audio::{AudioHandle, Command, Event, PlayerState, TrackInfo};
 use crate::config::Config;
+use crate::dialog::{self, Purpose};
 use crate::eq_presets::{self, Preset};
 use crate::library::adder::{self, AddEvent};
 use crate::library::scanner::{self, ScanEvent};
@@ -121,6 +122,7 @@ pub struct App {
     pub library_search: String,
     pub library_cache: ui::library_panel::Cache,
 
+    dialog: Option<Receiver<dialog::Picked>>,
     add_queue: std::collections::VecDeque<AddRequest>,
     add_job: Option<AddJob>,
 
@@ -235,6 +237,7 @@ impl App {
             library,
             library_gen: 0,
             scan: None,
+            dialog: None,
             scan_progress: None,
             library_search: String::new(),
             library_cache: Default::default(),
@@ -536,6 +539,41 @@ impl App {
     /// True while an add job runs or requests wait.
     pub fn adding(&self) -> bool {
         self.add_job.is_some() || !self.add_queue.is_empty()
+    }
+
+    /// True while a native dialog is open.
+    pub fn dialog_open(&self) -> bool {
+        self.dialog.is_some()
+    }
+
+    pub fn open_dialog(&mut self, purpose: Purpose) {
+        if self.dialog.is_some() {
+            return;
+        }
+        let start_dir = self
+            .cfg
+            .library_roots
+            .first()
+            .map(|r| expand_tilde(r))
+            .filter(|d| d.is_dir());
+        self.dialog = Some(dialog::spawn(purpose, start_dir, self.ctx.clone()));
+    }
+
+    fn handle_dialog(&mut self) {
+        let Some(rx) = &self.dialog else { return };
+        match rx.try_recv() {
+            Ok(picked) => {
+                self.dialog = None;
+                match picked.purpose {
+                    Purpose::AddFiles | Purpose::AddFolder if !picked.paths.is_empty() => {
+                        self.add_paths(picked.paths, false);
+                    }
+                    _ => {}
+                }
+            }
+            Err(crossbeam_channel::TryRecvError::Empty) => {}
+            Err(crossbeam_channel::TryRecvError::Disconnected) => self.dialog = None,
+        }
     }
 
     fn handle_add_events(&mut self) {
@@ -1176,6 +1214,7 @@ impl eframe::App for App {
         self.handle_output_loss(now);
         self.handle_scan_events();
         self.handle_add_events();
+        self.handle_dialog();
         self.handle_mpris(ctx);
         self.handle_theme(ctx);
         self.handle_drops(ctx);

@@ -4,6 +4,7 @@ use egui::{Align2, FontId, Rect, RichText, Sense, Ui, pos2, vec2};
 
 use crate::app::{App, Prompt, PromptKind};
 use crate::audio::PlayerState;
+use crate::dialog::Purpose;
 use crate::library::format_duration;
 
 const ROW_H: f32 = 17.0;
@@ -322,7 +323,16 @@ fn footer(app: &mut App, ui: &mut Ui) {
         ui.spacing_mut().item_spacing.x = 3.0;
         let mut edited = false;
         ui.menu_button("ADD", |ui| {
-            if ui.button("File / folder / M3U…").clicked() {
+            let idle = !app.dialog_open();
+            if ui.add_enabled(idle, egui::Button::new("Add files…")).clicked() {
+                app.open_dialog(Purpose::AddFiles);
+                ui.close();
+            }
+            if ui.add_enabled(idle, egui::Button::new("Add folder…")).clicked() {
+                app.open_dialog(Purpose::AddFolder);
+                ui.close();
+            }
+            if ui.button("Type a path…").clicked() {
                 app.prompt = Some(Prompt {
                     kind: PromptKind::AddPath,
                     text: String::new(),
