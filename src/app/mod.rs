@@ -266,8 +266,9 @@ impl App {
         // Entries outside the library have no cached tags; read them off the UI thread,
         // after the command-line request so its first file plays first.
         let mut untagged: Vec<PathBuf> = Vec::new();
+        let mut seen: std::collections::HashSet<&Path> = std::collections::HashSet::new();
         for t in app.playlists.iter().flat_map(|p| p.tracks.iter()) {
-            if t.mtime == 0 && !untagged.contains(&t.path) {
+            if t.mtime == 0 && seen.insert(t.path.as_path()) {
                 untagged.push(t.path.clone());
             }
         }

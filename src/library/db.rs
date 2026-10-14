@@ -223,7 +223,8 @@ fn subtree_range(root: &Path) -> (Vec<u8>, Vec<u8>) {
     (lo, hi)
 }
 
-/// Deletes tracks (and their auto-EQ rows) that lie under none of `roots`.
+/// Deletes tracks (and the auto-EQ rows of those tracks) that lie under none of `roots`.
+/// Auto-EQ rows for paths not in `tracks` (files added from outside the library) are kept.
 /// With no roots nothing is deleted.
 pub fn delete_outside_roots(conn: &Connection, roots: &[PathBuf]) -> rusqlite::Result<usize> {
     if roots.is_empty() {
@@ -241,7 +242,9 @@ pub fn delete_outside_roots(conn: &Connection, roots: &[PathBuf]) -> rusqlite::R
         args.push(hi);
     }
     conn.execute(
-        &format!("DELETE FROM eq_auto WHERE NOT ({cond})"),
+        &format!(
+            "DELETE FROM eq_auto WHERE path IN (SELECT path FROM tracks WHERE NOT ({cond}))"
+        ),
         rusqlite::params_from_iter(args.iter()),
     )?;
     conn.execute(
@@ -452,6 +455,29 @@ mod tests {
         assert_eq!(delete_outside_roots(&conn, &[PathBuf::from("/m/a")]).unwrap(), 2);
         let left: Vec<_> = load_tracks(&conn).unwrap().into_iter().map(|t| t.path).collect();
         assert_eq!(left, [PathBuf::from("/m/a/x.mp3")]);
+    }
+
+    #[test]
+    fn delete_outside_roots_scopes_eq_auto_to_pruned_tracks() {
+        let mut conn = open_memory().unwrap();
+        let tx = conn.transaction().unwrap();
+        for p in ["/m/a/x.mp3", "/n/z.mp3"] {
+            upsert_track(&tx, &track(p, "t")).unwrap();
+        }
+        tx.commit().unwrap();
+        for p in ["/m/a/x.mp3", "/n/z.mp3", "/elsewhere/free.mp3"] {
+            conn.execute(
+                "INSERT INTO eq_auto (path, preset) VALUES (?1, 'Pop')",
+                params![p.as_bytes()],
+            )
+            .unwrap();
+        }
+        // Trailing slash root keeps its tracks.
+        assert_eq!(delete_outside_roots(&conn, &[PathBuf::from("/m/a/")]).unwrap(), 1);
+        let mut stmt = conn.prepare("SELECT path FROM eq_auto ORDER BY path").unwrap();
+        let rows: Vec<Vec<u8>> =
+            stmt.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect();
+        assert_eq!(rows, [b"/elsewhere/free.mp3".to_vec(), b"/m/a/x.mp3".to_vec()]);
     }
 
     #[test]
