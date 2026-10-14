@@ -272,12 +272,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             let text = app.open_path.trim().to_string();
             if !text.is_empty() {
                 let play = ui.input(|i| i.modifiers.shift);
-                let list = app.active;
-                let before = app.playlists[list].len();
-                app.add_path(std::path::Path::new(&text));
-                if play && app.playlists[list].len() > before {
-                    app.play_index(list, before);
-                }
+                app.add_paths(vec![std::path::PathBuf::from(&text)], play);
                 app.open_path.clear();
             }
         }

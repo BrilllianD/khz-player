@@ -485,8 +485,9 @@ fn footer(app: &mut App, ui: &mut Ui) {
             } else {
                 format!("{} sel / ", pl.selected.len())
             };
+            let adding = if app.adding() { "adding… " } else { "" };
             ui.label(
-                RichText::new(format!("{sel}{} tracks  {}", pl.len(), format_duration(total)))
+                RichText::new(format!("{adding}{sel}{} tracks  {}", pl.len(), format_duration(total)))
                     .monospace()
                     .color(theme.text_dim),
             );

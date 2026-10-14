@@ -9,6 +9,7 @@ use crate::audio::spectrum::Spectrum;
 use crate::audio::{AudioHandle, Command, Event, PlayerState, TrackInfo};
 use crate::config::Config;
 use crate::eq_presets::{self, Preset};
+use crate::library::adder::{self, AddEvent};
 use crate::library::scanner::{self, ScanEvent};
 use crate::library::{Track, db, tags};
 use crate::mpris::{self, Caps, Mpris, MprisAction, MprisUpdate};
@@ -42,6 +43,29 @@ pub struct Prompt {
     pub kind: PromptKind,
     pub text: String,
     pub focus: bool,
+}
+
+/// Where the tracks of an add request go.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum AddTarget {
+    List(usize),
+    /// Fill tags of playlist entries that have no cached metadata.
+    Fill,
+    /// The target playlist was deleted; results are dropped.
+    Dropped,
+}
+
+struct AddRequest {
+    paths: Vec<PathBuf>,
+    target: AddTarget,
+    play: bool,
+}
+
+struct AddJob {
+    rx: Receiver<AddEvent>,
+    target: AddTarget,
+    play: bool,
+    played: bool,
 }
 
 #[derive(Debug, Default)]
@@ -96,6 +120,9 @@ pub struct App {
     pub scan_progress: Option<(usize, usize)>,
     pub library_search: String,
     pub library_cache: ui::library_panel::Cache,
+
+    add_queue: std::collections::VecDeque<AddRequest>,
+    add_job: Option<AddJob>,
 
     mpris: Mpris,
     last_mpris_pos: Instant,
@@ -159,12 +186,6 @@ impl App {
             .as_ref()
             .and_then(|c| db::load_playlists(c).ok())
             .unwrap_or_default();
-        // Entries outside the library have no cached tags; read them now.
-        for t in playlists.iter_mut().flat_map(|p| p.tracks.iter_mut()) {
-            if t.mtime == 0 && t.path.exists() && !library.is_empty() {
-                *t = tags::read(&t.path);
-            }
-        }
         if playlists.is_empty() {
             let mut p = Playlist::new("Default");
             p.dirty = true;
@@ -217,6 +238,8 @@ impl App {
             scan_progress: None,
             library_search: String::new(),
             library_cache: Default::default(),
+            add_queue: Default::default(),
+            add_job: None,
             mpris,
             last_mpris_pos: Instant::now(),
             mpris_caps: None,
@@ -241,13 +264,7 @@ impl App {
         }
 
         if !args.is_empty() {
-            let before = app.playlists[app.active].len();
-            for a in &args {
-                app.add_path(a);
-            }
-            if app.playlists[app.active].len() > before {
-                app.play_index(app.active, before);
-            }
+            app.add_paths(args, true);
         } else if let Some(t) = app.playlists[active].current_track() {
             // Restore the last track without starting playback; paused at the
             // old position if khz-player quit mid-track.
@@ -256,6 +273,22 @@ impl App {
                 Some(ms) => Command::Resume { path, at: Duration::from_millis(ms) },
                 None => Command::Load { path, play: false },
             });
+        }
+        // Entries outside the library have no cached tags; read them off the UI thread,
+        // after the command-line request so its first file plays first.
+        let mut untagged: Vec<PathBuf> = Vec::new();
+        for t in app.playlists.iter().flat_map(|p| p.tracks.iter()) {
+            if t.mtime == 0 && !untagged.contains(&t.path) {
+                untagged.push(t.path.clone());
+            }
+        }
+        if !untagged.is_empty() {
+            app.add_queue.push_back(AddRequest {
+                paths: untagged,
+                target: AddTarget::Fill,
+                play: false,
+            });
+            app.start_next_add();
         }
         if app.library.is_empty() {
             app.rescan();
@@ -473,51 +506,104 @@ impl App {
             .unwrap_or_else(|| tags::read(path))
     }
 
-    /// Adds a file, directory (recursively) or playlist file to the active playlist.
-    pub fn add_path(&mut self, path: &Path) {
-        let path = expand_tilde(path);
-        if path.is_dir() {
-            let mut files: Vec<PathBuf> = walkdir::WalkDir::new(&path)
-                .follow_links(true)
-                .into_iter()
-                .filter_map(Result::ok)
-                .filter(|e| e.file_type().is_file() && tags::is_audio(e.path()))
-                .map(|e| e.into_path())
-                .collect();
-            files.sort();
-            let tracks: Vec<Track> = files.iter().map(|p| self.track_for(p)).collect();
-            self.playlists[self.active].add(tracks);
-        } else if is_playlist_file(&path) {
-            self.import_m3u_into(&path, self.active);
-        } else if path.is_file() {
-            let t = self.track_for(&path);
-            self.playlists[self.active].add([t]);
-        } else {
-            self.toast(format!("Not found: {}", path.display()));
-            return;
-        }
-        self.after_playlist_edit();
+    /// Adds files, directories (recursively) and playlist files to the active playlist
+    /// off the UI thread. With `play`, starts the first row added.
+    pub fn add_paths(&mut self, paths: Vec<PathBuf>, play: bool) {
+        let paths = paths.iter().map(|p| expand_tilde(p)).collect();
+        self.add_queue.push_back(AddRequest {
+            paths,
+            target: AddTarget::List(self.active),
+            play,
+        });
+        self.start_next_add();
     }
 
-    pub fn import_m3u_into(&mut self, path: &Path, list: usize) {
-        match m3u::read(path) {
-            Ok(entries) => {
-                let tracks: Vec<Track> = entries
-                    .iter()
-                    .map(|e| {
-                        if e.path.exists() {
-                            self.track_for(&e.path)
-                        } else {
-                            let mut t = Track::from_path(e.path.clone());
-                            t.title = e.title.clone();
-                            t.duration_ms = e.duration_secs.map(|s| s as u64 * 1000);
-                            t
-                        }
-                    })
-                    .collect();
-                self.playlists[list].add(tracks);
+    fn start_next_add(&mut self) {
+        if self.add_job.is_some() {
+            return;
+        }
+        if let Some(req) = self.add_queue.pop_front() {
+            let rx = adder::start(req.paths, db::default_path(), self.ctx.clone());
+            self.add_job = Some(AddJob {
+                rx,
+                target: req.target,
+                play: req.play,
+                played: false,
+            });
+        }
+    }
+
+    /// True while an add job runs or requests wait.
+    pub fn adding(&self) -> bool {
+        self.add_job.is_some() || !self.add_queue.is_empty()
+    }
+
+    fn handle_add_events(&mut self) {
+        let Some(job) = &self.add_job else { return };
+        let mut events = Vec::new();
+        let mut finished = false;
+        loop {
+            match job.rx.try_recv() {
+                Ok(ev) => events.push(ev),
+                Err(crossbeam_channel::TryRecvError::Empty) => break,
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    finished = true;
+                    break;
+                }
             }
-            Err(e) => self.toast(format!("Cannot read {}: {e}", path.display())),
+        }
+        let (target, play) = (job.target, job.play);
+        for ev in events {
+            match ev {
+                AddEvent::Tracks(tracks) => match target {
+                    AddTarget::List(i) if i < self.playlists.len() => {
+                        let start = self.playlists[i].len();
+                        self.playlists[i].add(tracks);
+                        self.after_playlist_edit();
+                        let played = self.add_job.as_ref().is_some_and(|j| j.played);
+                        if play && !played {
+                            self.play_index(i, start);
+                            if let Some(j) = &mut self.add_job {
+                                j.played = true;
+                            }
+                        }
+                    }
+                    AddTarget::Fill => self.fill_metadata(tracks),
+                    _ => {}
+                },
+                AddEvent::Problem(msg) => {
+                    if target != AddTarget::Fill {
+                        self.toast(msg);
+                    }
+                }
+                AddEvent::Done => finished = true,
+            }
+        }
+        if finished {
+            self.add_job = None;
+            self.start_next_add();
+        }
+    }
+
+    /// Replaces playlist entries without cached metadata by freshly read tracks.
+    fn fill_metadata(&mut self, tracks: Vec<Track>) {
+        let by_path: std::collections::HashMap<&Path, &Track> =
+            tracks.iter().map(|t| (t.path.as_path(), t)).collect();
+        // Not marked dirty: playlists store only paths.
+        for pl in &mut self.playlists {
+            for t in &mut pl.tracks {
+                if t.mtime == 0
+                    && let Some(fresh) = by_path.get(t.path.as_path())
+                {
+                    *t = (*fresh).clone();
+                }
+            }
+        }
+        if let Some(now) = &self.now
+            && let Some(fresh) = by_path.get(now.path.as_path())
+        {
+            self.now_track = Some((*fresh).clone());
+            self.sync_title();
         }
     }
 
@@ -528,8 +614,12 @@ impl App {
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Imported".into());
         let idx = self.new_playlist(name);
-        self.import_m3u_into(&path, idx);
-        self.after_playlist_edit();
+        self.add_queue.push_back(AddRequest {
+            paths: vec![path],
+            target: AddTarget::List(idx),
+            play: false,
+        });
+        self.start_next_add();
     }
 
     pub fn export_m3u(&mut self, path: &Path) {
@@ -588,6 +678,17 @@ impl App {
             self.playlists.push(d);
         }
         let fix = |i: usize| if i > idx { i - 1 } else { i };
+        let retarget = |t: &mut AddTarget| {
+            if let AddTarget::List(i) = *t {
+                *t = if i == idx { AddTarget::Dropped } else { AddTarget::List(fix(i)) };
+            }
+        };
+        if let Some(j) = &mut self.add_job {
+            retarget(&mut j.target);
+        }
+        for r in &mut self.add_queue {
+            retarget(&mut r.target);
+        }
         self.active = fix(self.active).min(self.playlists.len() - 1);
         if self.playing_list == idx {
             // The track keeps playing; next/prev continue in the visible list.
@@ -952,9 +1053,7 @@ impl App {
         if dropped.is_empty() {
             return;
         }
-        for p in dropped {
-            self.add_path(&p);
-        }
+        self.add_paths(dropped, false);
     }
 
     pub fn dispatch(&mut self, ctx: &egui::Context, a: Action) {
@@ -1076,6 +1175,7 @@ impl eframe::App for App {
         self.handle_audio_events();
         self.handle_output_loss(now);
         self.handle_scan_events();
+        self.handle_add_events();
         self.handle_mpris(ctx);
         self.handle_theme(ctx);
         self.handle_drops(ctx);
@@ -1147,12 +1247,6 @@ fn expand_tilde(p: &Path) -> PathBuf {
         return b.home_dir().join(rest);
     }
     p.to_path_buf()
-}
-
-fn is_playlist_file(p: &Path) -> bool {
-    p.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("m3u") || e.eq_ignore_ascii_case("m3u8"))
 }
 
 #[cfg(test)]

@@ -155,7 +155,7 @@ fn prompt_modal(app: &mut App, ctx: &egui::Context) {
             return;
         }
         match p.kind {
-            PromptKind::AddPath => app.add_path(std::path::Path::new(&text)),
+            PromptKind::AddPath => app.add_paths(vec![std::path::PathBuf::from(&text)], false),
             PromptKind::ImportM3u => app.import_m3u_as_new(std::path::Path::new(&text)),
             PromptKind::ExportM3u => app.export_m3u(std::path::Path::new(&text)),
             PromptKind::NewPlaylist => {
