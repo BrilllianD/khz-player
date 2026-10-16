@@ -84,15 +84,23 @@ newer glibc.
 | `Z` `X` `C` `V` `B` | Previous, play (restarts when playing), pause / resume, stop, next |
 | `Space` | Play / pause |
 | `←` `→` | Seek 5 s back / forward |
-| `↑` `↓`, `+` `-` | Volume up / down |
+| `↑` `↓`, `+` `-` | Volume up / down (`↑` `↓` move the cursor instead while the playlist has focus) |
 | `R` | Cycle repeat (off, all, one) |
 | `S` | Toggle shuffle |
 | `L` | Add files (opens the file dialog) |
 | `J` | Jump to a track by name |
-| `Enter` | Play the selected track |
+| `↑` `↓` (playlist focused) | Move the cursor |
+| `Shift+↑` `Shift+↓` | Extend the selection |
+| `PgUp` `PgDn` `Home` `End` | Move the cursor by a page / to the ends; with `Shift`, extend the selection |
+| `Ctrl+↑` `Ctrl+↓` | Move the selected tracks up / down |
+| `Enter` | Play the track under the cursor (or the first selected) |
 | `Del` | Remove selected tracks |
 | `Ctrl+A` | Select all |
+| `Ctrl+T` | Switch elapsed / remaining time |
 | `Alt+G` / `Alt+E` / `Alt+L` | Show or hide equalizer / playlist / library |
+
+Clicking the playlist gives it keyboard focus (its border turns the accent
+color); clicking anywhere else or hiding it returns the arrows to volume.
 
 ## Mouse
 
@@ -100,13 +108,15 @@ newer glibc.
 - Drag tracks to reorder them; a selection moves as one block.
 - Shift-click and Ctrl-click select ranges and single tracks.
 - Click the time display to switch between elapsed and remaining.
+- Hover over the seek bar to see the time under the pointer.
 - Scroll over the volume bar to change volume; double-click the balance bar to center it.
 - Drag the title strip to move the window.
 - Drop files or folders onto the window to add them. Wayland drag and drop
   may not work under every compositor; the file dialog (`L`, eject button),
   ADD > "Type a path…" and the library always do.
 
-The playlist footer menus hold the rest: ADD, REM (remove missing files,
+The playlist footer shows the count and length of the selected tracks next to
+the totals. Its menus hold the rest: ADD, REM (remove missing files,
 duplicates by path or by tags), SEL, MISC (sort, reverse, randomize) and LIST
 (new, rename, delete, import and export M3U).
 
