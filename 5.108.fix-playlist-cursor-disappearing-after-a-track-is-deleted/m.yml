@@ -1,4 +1,4 @@
-status: doing
+status: done
 tags:
 - user-request
 - needs-agent
@@ -6,7 +6,7 @@ tags:
 - ui
 assignee: claude
 created: 2026-10-14T18:37:52Z
-updated: 2026-10-16T21:28:35Z
+updated: 2026-10-16T21:29:41Z
 attachments: []
 links: []
 related: []
