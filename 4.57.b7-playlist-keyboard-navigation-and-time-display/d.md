@@ -14,3 +14,7 @@ Arrows, Shift range and Ctrl+Up/Down reorder done; Ctrl+T, seek hover and footer
 
 Ctrl+T, seek hover, footer
 
+## 2026-10-16T21:32:53Z — Bronnikov Aleksandr
+
+e468cac: Arrows/PgUp/Home/Ctrl+Up-Down while focused, Ctrl+T, seek hover time, footer selected/total time
+
