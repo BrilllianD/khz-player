@@ -19,6 +19,7 @@ use crate::shortcuts::{self, Action};
 use crate::theme::Theme;
 use crate::theme_watch::{self, ThemeWatcher};
 use crate::ui;
+use crate::ui::playlist_panel::ScrollMode;
 use crate::{fonts, m3u};
 
 
@@ -121,7 +122,11 @@ pub struct App {
     pub jump: Option<JumpState>,
     pub toasts: Vec<(String, Instant)>,
     /// Scroll the playlist to this row on the next frame.
-    pub scroll_to: Option<usize>,
+    pub scroll_to: Option<(usize, ui::playlist_panel::ScrollMode)>,
+    /// The playlist has keyboard focus (set by clicks in its panel).
+    pub playlist_focus: bool,
+    /// Rows that fit in the playlist view; written by the panel each frame.
+    pub playlist_page_rows: usize,
     last_frame: Instant,
 }
 
@@ -234,6 +239,8 @@ impl App {
             jump: None,
             toasts: Vec::new(),
             scroll_to: None,
+            playlist_focus: false,
+            playlist_page_rows: 1,
             last_frame: Instant::now(),
         };
         app.push_eq();
@@ -330,11 +337,29 @@ impl App {
             }
             Action::TogglePlaylist => {
                 self.cfg.show_playlist = !self.cfg.show_playlist;
+                if !self.cfg.show_playlist {
+                    self.playlist_focus = false;
+                }
                 self.resize_window(ctx);
             }
             Action::ToggleLibrary => {
                 self.cfg.show_library = !self.cfg.show_library;
                 self.resize_window(ctx);
+            }
+            Action::Cursor(mv, extend) => {
+                let rows = self.playlist_page_rows;
+                if let Some(c) = self.playlists[self.active].move_cursor(mv, rows, extend) {
+                    self.scroll_to = Some((c, ScrollMode::Nearest));
+                }
+            }
+            Action::MoveSelected(dir) => {
+                if self.playlists[self.active].nudge_selected(dir) {
+                    self.after_playlist_edit();
+                    let pl = &self.playlists[self.active];
+                    if let Some(c) = pl.cursor.or_else(|| pl.selected.first().copied()) {
+                        self.scroll_to = Some((c, ScrollMode::Nearest));
+                    }
+                }
             }
             Action::AddFiles => self.open_dialog(Purpose::AddFiles),
             Action::Jump => {
@@ -386,7 +411,7 @@ impl eframe::App for App {
             && self.jump.is_none()
             && !self.settings_open
         {
-            for a in shortcuts::collect(ctx) {
+            for a in shortcuts::collect(ctx, self.playlist_focus) {
                 self.dispatch(ctx, a);
             }
         }

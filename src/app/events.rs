@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::playlist_panel::ScrollMode;
 
 /// Minimum time between attempts to reopen a lost audio output.
 const REOPEN_INTERVAL: Duration = Duration::from_secs(2);
@@ -144,7 +145,8 @@ impl App {
             .playlists
             .get(self.playing_list)
             .filter(|_| self.playing_list == self.active)
-            .and_then(|p| p.current);
+            .and_then(|p| p.current)
+            .map(|c| (c, ScrollMode::Third));
         self.mark_cfg();
         self.refresh_prefetch();
     }

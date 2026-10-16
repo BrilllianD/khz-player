@@ -3,6 +3,7 @@
 use egui::{Id, Key, Modal, RichText};
 
 use crate::app::App;
+use crate::ui::playlist_panel::ScrollMode;
 
 const MAX_SHOWN: usize = 200;
 
@@ -93,7 +94,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     if let Some(i) = chosen {
         app.jump = None;
         app.play_index(app.active, i);
-        app.scroll_to = Some(i);
+        app.scroll_to = Some((i, ScrollMode::Third));
     } else if close {
         app.jump = None;
     }

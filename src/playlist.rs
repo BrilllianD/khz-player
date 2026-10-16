@@ -32,6 +32,15 @@ impl Repeat {
     }
 }
 
+/// A keyboard cursor step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Move {
+    By(isize),
+    Page(isize),
+    First,
+    Last,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Playlist {
     /// Database row id; `None` until first saved.
@@ -260,6 +269,56 @@ impl Playlist {
         self.invalidate_shuffle();
         self.dirty = true;
         true
+    }
+
+    /// Moves the cursor and selects the row (or, with `extend`, the range from
+    /// the anchor). `page` is the rows in view. Returns the new cursor row, or
+    /// `None` for an empty list. The first key press selects row 0.
+    pub fn move_cursor(&mut self, mv: Move, page: usize, extend: bool) -> Option<usize> {
+        let n = self.len();
+        if n == 0 {
+            return None;
+        }
+        let from = self
+            .cursor
+            .or_else(|| self.selected.first().copied())
+            .map(|c| c.min(n - 1));
+        let clamp = |v: isize| v.clamp(0, n as isize - 1) as usize;
+        let t = match from {
+            None => 0,
+            Some(f) => match mv {
+                Move::By(d) => clamp(f as isize + d),
+                Move::Page(d) => {
+                    let step = page.saturating_sub(1).max(1) as isize;
+                    clamp(f as isize + d * step)
+                }
+                Move::First => 0,
+                Move::Last => n - 1,
+            },
+        };
+        if extend {
+            let a = self.anchor.filter(|&a| a < n).or(from).unwrap_or(t);
+            self.anchor = Some(a);
+            self.selected = (a.min(t)..=a.max(t)).collect();
+        } else {
+            self.selected = BTreeSet::from([t]);
+            self.anchor = Some(t);
+        }
+        self.cursor = Some(t);
+        Some(t)
+    }
+
+    /// Moves the selected block one row up (`dir < 0`) or down (`dir > 0`).
+    /// Returns false when nothing moved.
+    pub fn nudge_selected(&mut self, dir: isize) -> bool {
+        let (Some(&first), Some(&last)) = (self.selected.first(), self.selected.last()) else {
+            return false;
+        };
+        match dir.signum() {
+            -1 if first > 0 => self.move_selected(first - 1),
+            1 => self.move_selected(last + 2),
+            _ => false,
+        }
     }
 
     pub fn reverse(&mut self) {
@@ -721,6 +780,87 @@ mod tests {
 
     fn names(p: &Playlist) -> Vec<String> {
         p.tracks.iter().map(|t| t.display_title()).collect()
+    }
+
+    #[test]
+    fn move_cursor_first_key_selects_row_zero() {
+        let mut p = pl(5);
+        assert_eq!(p.move_cursor(Move::Last, 10, false), Some(0));
+        assert_eq!(p.selected, [0].into());
+        assert_eq!(p.anchor, Some(0));
+    }
+
+    #[test]
+    fn move_cursor_starts_from_selection() {
+        let mut p = pl(5);
+        p.selected = [3].into();
+        p.cursor = None;
+        assert_eq!(p.move_cursor(Move::By(1), 10, false), Some(4));
+    }
+
+    #[test]
+    fn move_cursor_clamps_at_edges() {
+        let mut p = pl(5);
+        p.cursor = Some(0);
+        assert_eq!(p.move_cursor(Move::By(-1), 10, false), Some(0));
+        assert_eq!(p.move_cursor(Move::Last, 10, false), Some(4));
+        assert_eq!(p.move_cursor(Move::By(1), 10, false), Some(4));
+        assert_eq!(p.move_cursor(Move::First, 10, false), Some(0));
+    }
+
+    #[test]
+    fn move_cursor_pages() {
+        let mut p = pl(30);
+        p.cursor = Some(0);
+        assert_eq!(p.move_cursor(Move::Page(1), 10, false), Some(9));
+        assert_eq!(p.move_cursor(Move::Page(1), 10, false), Some(18));
+        assert_eq!(p.move_cursor(Move::Page(-1), 10, false), Some(9));
+        assert_eq!(p.move_cursor(Move::Page(1), 1, false), Some(10));
+    }
+
+    #[test]
+    fn move_cursor_shift_extends() {
+        let mut p = pl(6);
+        p.cursor = Some(2);
+        p.anchor = Some(2);
+        p.selected = [2].into();
+        p.move_cursor(Move::By(1), 10, true);
+        assert_eq!(p.selected, [2, 3].into());
+        assert_eq!(p.anchor, Some(2));
+        assert_eq!(p.cursor, Some(3));
+        p.move_cursor(Move::By(-1), 10, true);
+        p.move_cursor(Move::By(-1), 10, true);
+        assert_eq!(p.selected, [1, 2].into());
+        p.move_cursor(Move::Last, 10, true);
+        assert_eq!(p.selected, [2, 3, 4, 5].into());
+    }
+
+    #[test]
+    fn move_cursor_empty_list() {
+        let mut p = pl(0);
+        assert_eq!(p.move_cursor(Move::By(1), 10, false), None);
+        assert_eq!(p.cursor, None);
+        assert!(p.selected.is_empty());
+    }
+
+    #[test]
+    fn nudge_selected_up_and_down() {
+        let mut p = pl(4);
+        p.selected = [1].into();
+        p.cursor = Some(1);
+        assert!(p.nudge_selected(-1));
+        assert_eq!(names(&p), ["1", "0", "2", "3"]);
+        assert_eq!(p.cursor, Some(0));
+        assert!(!p.nudge_selected(-1));
+        assert!(p.nudge_selected(1));
+        assert!(p.nudge_selected(1));
+        assert_eq!(names(&p), ["0", "2", "1", "3"]);
+        assert_eq!(p.cursor, Some(2));
+        p.selected = [3].into();
+        assert!(!p.nudge_selected(1));
+        p.selected.clear();
+        assert!(!p.nudge_selected(1));
+        assert!(!p.nudge_selected(-1));
     }
 
     #[test]

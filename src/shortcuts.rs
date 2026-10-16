@@ -2,6 +2,8 @@
 
 use egui::{Key, Modifiers};
 
+use crate::playlist::Move;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Action {
     Prev,
@@ -24,6 +26,10 @@ pub enum Action {
     PlaySelected,
     SelectAll,
     Settings,
+    /// Move the playlist cursor; the bool extends the selection (Shift).
+    Cursor(Move, bool),
+    /// Move the selected block one row: -1 up, +1 down.
+    MoveSelected(isize),
 }
 
 const BINDINGS: &[(Modifiers, Key, Action)] = &[
@@ -53,11 +59,33 @@ const BINDINGS: &[(Modifiers, Key, Action)] = &[
     (Modifiers::CTRL, Key::P, Action::Settings),
 ];
 
+/// Consumed before BINDINGS while the playlist has focus. Ctrl and Shift
+/// rows first: an unset Shift is ignored when matching.
+const PLAYLIST_BINDINGS: &[(Modifiers, Key, Action)] = &[
+    (Modifiers::CTRL, Key::ArrowUp, Action::MoveSelected(-1)),
+    (Modifiers::CTRL, Key::ArrowDown, Action::MoveSelected(1)),
+    (Modifiers::SHIFT, Key::ArrowUp, Action::Cursor(Move::By(-1), true)),
+    (Modifiers::SHIFT, Key::ArrowDown, Action::Cursor(Move::By(1), true)),
+    (Modifiers::SHIFT, Key::PageUp, Action::Cursor(Move::Page(-1), true)),
+    (Modifiers::SHIFT, Key::PageDown, Action::Cursor(Move::Page(1), true)),
+    (Modifiers::SHIFT, Key::Home, Action::Cursor(Move::First, true)),
+    (Modifiers::SHIFT, Key::End, Action::Cursor(Move::Last, true)),
+    (Modifiers::NONE, Key::ArrowUp, Action::Cursor(Move::By(-1), false)),
+    (Modifiers::NONE, Key::ArrowDown, Action::Cursor(Move::By(1), false)),
+    (Modifiers::NONE, Key::PageUp, Action::Cursor(Move::Page(-1), false)),
+    (Modifiers::NONE, Key::PageDown, Action::Cursor(Move::Page(1), false)),
+    (Modifiers::NONE, Key::Home, Action::Cursor(Move::First, false)),
+    (Modifiers::NONE, Key::End, Action::Cursor(Move::Last, false)),
+];
+
 /// Consumes matching key presses. Call only when no text field has focus.
-pub fn collect(ctx: &egui::Context) -> Vec<Action> {
+/// With `playlist_focus`, the cursor keys in PLAYLIST_BINDINGS win over BINDINGS.
+pub fn collect(ctx: &egui::Context, playlist_focus: bool) -> Vec<Action> {
     ctx.input_mut(|i| {
-        BINDINGS
+        let first: &[_] = if playlist_focus { PLAYLIST_BINDINGS } else { &[] };
+        first
             .iter()
+            .chain(BINDINGS)
             .filter(|(m, k, _)| i.consume_key(*m, *k))
             .map(|(_, _, a)| *a)
             .collect()
@@ -68,7 +96,7 @@ pub fn collect(ctx: &egui::Context) -> Vec<Action> {
 mod tests {
     use super::*;
 
-    fn press(modifiers: Modifiers, key: Key) -> Vec<Action> {
+    fn press(focus: bool, modifiers: Modifiers, key: Key) -> Vec<Action> {
         let ctx = egui::Context::default();
         let input = egui::RawInput {
             events: vec![
@@ -84,18 +112,43 @@ mod tests {
             ..Default::default()
         };
         let mut actions = Vec::new();
-        ctx.run_ui(input, |ui| actions = collect(ui.ctx()))
+        ctx.run_ui(input, |ui| actions = collect(ui.ctx(), focus))
             .drop_without_applying_deltas();
         actions
     }
 
     #[test]
     fn keys_map_to_actions() {
-        assert_eq!(press(Modifiers::NONE, Key::C), [Action::PauseToggle]);
+        assert_eq!(press(false, Modifiers::NONE, Key::C), [Action::PauseToggle]);
         // Alt+L must not also count as a plain L: Alt is ignored when matching,
         // so the Alt binding has to come first and consume the key.
-        assert_eq!(press(Modifiers::ALT, Key::L), [Action::ToggleLibrary]);
-        assert_eq!(press(Modifiers::NONE, Key::L), [Action::AddFiles]);
-        assert_eq!(press(Modifiers::CTRL, Key::P), [Action::Settings]);
+        assert_eq!(press(false, Modifiers::ALT, Key::L), [Action::ToggleLibrary]);
+        assert_eq!(press(false, Modifiers::NONE, Key::L), [Action::AddFiles]);
+        assert_eq!(press(false, Modifiers::CTRL, Key::P), [Action::Settings]);
+    }
+
+    #[test]
+    fn playlist_focus_takes_arrows() {
+        let n = Modifiers::NONE;
+        assert_eq!(press(false, n, Key::ArrowUp), [Action::VolumeDelta(0.02)]);
+        assert_eq!(
+            press(true, n, Key::ArrowUp),
+            [Action::Cursor(Move::By(-1), false)]
+        );
+        assert_eq!(
+            press(true, Modifiers::SHIFT, Key::ArrowDown),
+            [Action::Cursor(Move::By(1), true)]
+        );
+        assert_eq!(
+            press(true, Modifiers::CTRL, Key::ArrowUp),
+            [Action::MoveSelected(-1)]
+        );
+        assert_eq!(
+            press(true, n, Key::PageDown),
+            [Action::Cursor(Move::Page(1), false)]
+        );
+        assert_eq!(press(true, n, Key::ArrowLeft), [Action::SeekRel(-5000)]);
+        assert!(press(false, n, Key::Home).is_empty());
+        assert!(press(false, Modifiers::CTRL, Key::ArrowUp).is_empty());
     }
 }

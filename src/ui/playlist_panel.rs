@@ -9,6 +9,15 @@ use crate::library::format_duration;
 
 const ROW_H: f32 = 17.0;
 
+/// Where a scrolled-to row lands in the view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollMode {
+    /// A third of the way down.
+    Third,
+    /// The nearest edge, so stepping row by row does not jump.
+    Nearest,
+}
+
 pub fn show(app: &mut App, ui: &mut Ui) {
     let theme = app.theme.clone();
     let full = ui.max_rect().shrink(4.0);
@@ -94,6 +103,7 @@ fn tabs(app: &mut App, ui: &mut Ui) {
 
 fn rows(app: &mut App, ui: &mut Ui) {
     let theme = app.theme.clone();
+    app.playlist_page_rows = ((ui.available_height() / ROW_H).floor() as usize).max(1);
     let active = app.active;
     let is_playing_list = active == app.playing_list && app.now.is_some();
     let n = app.playlists[active].len();
@@ -135,10 +145,10 @@ fn rows(app: &mut App, ui: &mut Ui) {
         .auto_shrink([false, false]);
     // Scroll offset and height of the list as last shown.
     let view_id = egui::Id::new(("pl-view", active));
-    if let Some(row) = app.scroll_to.take() {
+    if let Some((row, mode)) = app.scroll_to.take() {
         let view = ui.ctx().data(|d| d.get_temp::<(f32, f32)>(view_id));
         let view = view.unwrap_or((f32::NAN, ui.available_height()));
-        if let Some(y) = scroll_target(row, view) {
+        if let Some(y) = scroll_target(row, view, mode) {
             area = area.vertical_scroll_offset(y);
         }
     }
@@ -316,14 +326,19 @@ fn drop_gap_at(y: f32, i: usize, n: usize, top: f32, bottom: f32, list_bottom: f
     }
 }
 
-/// Scroll offset that brings `row` into a list view of `(offset, height)`, with
-/// the row a third of the way down; `None` when the row is already fully in view.
-fn scroll_target(row: usize, (top, height): (f32, f32)) -> Option<f32> {
+/// Scroll offset that brings `row` into a list view of `(offset, height)`:
+/// `Third` puts the row a third of the way down, `Nearest` at the nearest
+/// edge. `None` when the row is already fully in view.
+fn scroll_target(row: usize, (top, height): (f32, f32), mode: ScrollMode) -> Option<f32> {
     let y = row as f32 * ROW_H;
     if y >= top && y + ROW_H <= top + height {
         return None;
     }
-    Some((y - height / 3.0).max(0.0))
+    match mode {
+        ScrollMode::Third => Some((y - height / 3.0).max(0.0)),
+        ScrollMode::Nearest if y < top => Some(y),
+        ScrollMode::Nearest => Some((y + ROW_H - height).max(0.0)),
+    }
 }
 
 fn footer(app: &mut App, ui: &mut Ui) {
@@ -533,16 +548,27 @@ mod tests {
     fn scroll_target_only_when_out_of_view() {
         // View shows rows 10..20 (170..340 px).
         let view = (170.0, 170.0);
-        assert_eq!(scroll_target(10, view), None);
-        assert_eq!(scroll_target(19, view), None);
+        assert_eq!(scroll_target(10, view, ScrollMode::Third), None);
+        assert_eq!(scroll_target(19, view, ScrollMode::Third), None);
         // Below or above the view: row lands a third of the way down.
-        assert_eq!(scroll_target(20, view), Some(20.0 * ROW_H - 170.0 / 3.0));
-        assert_eq!(scroll_target(9, view), Some(9.0 * ROW_H - 170.0 / 3.0));
+        assert_eq!(scroll_target(20, view, ScrollMode::Third), Some(20.0 * ROW_H - 170.0 / 3.0));
+        assert_eq!(scroll_target(9, view, ScrollMode::Third), Some(9.0 * ROW_H - 170.0 / 3.0));
         // Partly hidden counts as out of view.
-        assert!(scroll_target(10, (171.0, 170.0)).is_some());
+        assert!(scroll_target(10, (171.0, 170.0), ScrollMode::Third).is_some());
         // Near the top the offset clamps to 0.
-        assert_eq!(scroll_target(1, (500.0, 170.0)), Some(0.0));
+        assert_eq!(scroll_target(1, (500.0, 170.0), ScrollMode::Third), Some(0.0));
         // No view stored yet (NaN offset): always scroll.
-        assert!(scroll_target(0, (f32::NAN, 170.0)).is_some());
+        assert!(scroll_target(0, (f32::NAN, 170.0), ScrollMode::Third).is_some());
+    }
+
+    #[test]
+    fn scroll_target_nearest_aligns_edge() {
+        let view = (170.0, 170.0);
+        let n = ScrollMode::Nearest;
+        assert_eq!(scroll_target(10, view, n), None);
+        assert_eq!(scroll_target(19, view, n), None);
+        assert_eq!(scroll_target(20, view, n), Some(20.0 * ROW_H + ROW_H - 170.0));
+        assert_eq!(scroll_target(9, view, n), Some(9.0 * ROW_H));
+        assert_eq!(scroll_target(0, (f32::NAN, 170.0), n), Some(0.0));
     }
 }

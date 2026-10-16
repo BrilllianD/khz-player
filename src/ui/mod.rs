@@ -102,13 +102,21 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             .show(ui, |ui| eq_panel::show(app, ui));
     }
 
-    egui::CentralPanel::default()
-        .frame(section_frame(app))
+    let border = if app.playlist_focus { app.theme.accent } else { app.theme.frame };
+    let central = egui::CentralPanel::default()
+        .frame(section_frame(app).stroke(egui::Stroke::new(1.0, border)))
         .show(ui, |ui| {
             if app.cfg.show_playlist {
                 playlist_panel::show(app, ui);
             }
         });
+    let press = ctx.input(|i| i.pointer.primary_pressed().then(|| i.pointer.interact_pos()).flatten());
+    if let Some(pos) = press {
+        app.playlist_focus = app.cfg.show_playlist && central.response.rect.contains(pos);
+    }
+    if !app.cfg.show_playlist {
+        app.playlist_focus = false;
+    }
 
     prompt_modal(app, &ctx);
     jump_dialog::show(app, &ctx);
