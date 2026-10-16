@@ -10,3 +10,7 @@ arrows and reorder in progress
 
 Arrows, Shift range and Ctrl+Up/Down reorder done; Ctrl+T, seek hover and footer left
 
+## 2026-10-16T21:32:18Z — Bronnikov Aleksandr
+
+Ctrl+T, seek hover, footer
+
