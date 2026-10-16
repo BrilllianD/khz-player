@@ -159,6 +159,14 @@ fn rows(app: &mut App, ui: &mut Ui) {
             } else if resp.hovered() {
                 p.rect_filled(rect, 0.0, theme.bg_dark);
             }
+            if pl.cursor == Some(i) {
+                p.rect_stroke(
+                    rect,
+                    0.0,
+                    egui::Stroke::new(1.0, theme.text_dim),
+                    egui::StrokeKind::Inside,
+                );
+            }
             let color = if current {
                 theme.text_bright
             } else if app.failed.contains(&t.path)
@@ -247,6 +255,7 @@ fn rows(app: &mut App, ui: &mut Ui) {
             pl.selected.clear();
             pl.selected.insert(i);
             pl.anchor = Some(i);
+            pl.cursor = Some(i);
         }
         ui.ctx().data_mut(|d| d.insert_temp(drag_id, true));
     }
@@ -266,6 +275,7 @@ fn rows(app: &mut App, ui: &mut Ui) {
 
     let pl = &mut app.playlists[active];
     if let Some((i, m)) = clicked {
+        pl.cursor = Some(i);
         if m.shift
             && let Some(a) = pl.anchor
         {

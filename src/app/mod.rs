@@ -345,7 +345,12 @@ impl App {
             }
             Action::RemoveSelected => self.remove_selected(),
             Action::PlaySelected => {
-                if let Some(&i) = self.playlists[self.active].selected.first() {
+                let pl = &self.playlists[self.active];
+                let row = pl
+                    .cursor
+                    .filter(|&c| c < pl.len())
+                    .or_else(|| pl.selected.first().copied());
+                if let Some(i) = row {
                     self.play_index(self.active, i);
                 }
             }

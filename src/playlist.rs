@@ -42,6 +42,8 @@ pub struct Playlist {
     pub selected: BTreeSet<usize>,
     /// Anchor for shift-click range selection.
     pub anchor: Option<usize>,
+    /// Focused row: moved by the keyboard, played by Enter.
+    pub cursor: Option<usize>,
     /// Set on any change that should be persisted.
     pub dirty: bool,
     /// Where playback continues after the playing row was removed: the index
@@ -87,17 +89,20 @@ impl Playlist {
         self.resume_at = None;
         self.selected.clear();
         self.anchor = None;
+        self.cursor = None;
         self.invalidate_shuffle();
         self.dirty = true;
     }
 
     /// Removes the given indices, keeping `current` pointing at the same track.
     /// If the current track is removed, `current` becomes `None` and the next
-    /// track is the one that followed it.
+    /// track is the one that followed it. Afterwards one row stays selected
+    /// and holds the cursor: the lowest removed index, clamped to the list.
     pub fn remove(&mut self, indices: &BTreeSet<usize>) {
         if indices.is_empty() {
             return;
         }
+        let lowest = *indices.first().expect("not empty");
         let mut new_current = None;
         let mut resume_at = None;
         let mut kept = Vec::with_capacity(self.tracks.len());
@@ -123,8 +128,16 @@ impl Playlist {
         self.tracks = kept;
         self.current = new_current;
         self.resume_at = resume_at;
-        self.selected.clear();
-        self.anchor = None;
+        if self.tracks.is_empty() {
+            self.selected.clear();
+            self.anchor = None;
+            self.cursor = None;
+        } else {
+            let c = lowest.min(self.tracks.len() - 1);
+            self.cursor = Some(c);
+            self.anchor = Some(c);
+            self.selected = BTreeSet::from([c]);
+        }
         self.invalidate_shuffle();
         self.dirty = true;
     }
@@ -200,8 +213,13 @@ impl Playlist {
         F: FnMut(&Track, &Track) -> std::cmp::Ordering,
     {
         let cur_path = self.current_track().map(|t| t.path.clone());
+        let cursor_path = self
+            .cursor
+            .and_then(|c| self.tracks.get(c))
+            .map(|t| t.path.clone());
         self.tracks.sort_by(|a, b| cmp(a, b));
         self.current = cur_path.and_then(|p| self.tracks.iter().position(|t| t.path == p));
+        self.cursor = cursor_path.and_then(|p| self.tracks.iter().position(|t| t.path == p));
         self.resume_at = None;
         self.selected.clear();
         self.anchor = None;
@@ -235,6 +253,7 @@ impl Playlist {
             .map(|&i| old[i].take().expect("index used once"))
             .collect();
         self.current = self.current.map(|c| new_pos[c]);
+        self.cursor = self.cursor.filter(|&c| c < n).map(|c| new_pos[c]);
         self.resume_at = None;
         self.anchor = self.anchor.map(|a| new_pos[a]);
         self.selected = self.selected.iter().map(|&i| new_pos[i]).collect();
@@ -247,6 +266,7 @@ impl Playlist {
         self.tracks.reverse();
         let n = self.tracks.len();
         self.current = self.current.map(|c| n - 1 - c);
+        self.cursor = self.cursor.map(|c| n - 1 - c);
         self.resume_at = None;
         self.selected.clear();
         self.anchor = None;
@@ -256,8 +276,13 @@ impl Playlist {
 
     pub fn randomize(&mut self) {
         let cur_path = self.current_track().map(|t| t.path.clone());
+        let cursor_path = self
+            .cursor
+            .and_then(|c| self.tracks.get(c))
+            .map(|t| t.path.clone());
         self.tracks.shuffle(&mut rand::rng());
         self.current = cur_path.and_then(|p| self.tracks.iter().position(|t| t.path == p));
+        self.cursor = cursor_path.and_then(|p| self.tracks.iter().position(|t| t.path == p));
         self.resume_at = None;
         self.selected.clear();
         self.anchor = None;
@@ -632,6 +657,66 @@ mod tests {
         let mut p = pl(0);
         assert_eq!(p.next(Repeat::All, true, true), None);
         assert_eq!(p.prev(Repeat::All, false), None);
+    }
+
+    #[test]
+    fn remove_middle_keeps_cursor_on_next_row() {
+        let mut p = pl(5);
+        p.selected = [2].into();
+        p.remove_selected();
+        assert_eq!(p.cursor, Some(2));
+        assert_eq!(p.selected, [2].into());
+        assert_eq!(p.anchor, Some(2));
+        assert_eq!(names(&p)[2], "3");
+    }
+
+    #[test]
+    fn remove_block_uses_lowest_index() {
+        let mut p = pl(5);
+        p.selected = [1, 3].into();
+        p.remove_selected();
+        assert_eq!(p.cursor, Some(1));
+        assert_eq!(names(&p), ["0", "2", "4"]);
+    }
+
+    #[test]
+    fn remove_last_row_moves_cursor_up() {
+        let mut p = pl(3);
+        p.selected = [2].into();
+        p.remove_selected();
+        assert_eq!(p.cursor, Some(1));
+        assert_eq!(p.selected, [1].into());
+    }
+
+    #[test]
+    fn remove_all_clears_cursor() {
+        let mut p = pl(3);
+        p.select_all();
+        p.remove_selected();
+        assert_eq!(p.cursor, None);
+        assert_eq!(p.anchor, None);
+        assert!(p.selected.is_empty());
+    }
+
+    #[test]
+    fn cursor_follows_move_selected() {
+        let mut p = pl(5);
+        p.selected = [1].into();
+        p.cursor = Some(1);
+        p.move_selected(4);
+        assert_eq!(p.cursor, Some(3));
+    }
+
+    #[test]
+    fn cursor_follows_sort_and_reverse() {
+        let mut p = pl(4);
+        p.cursor = Some(0);
+        p.reverse();
+        assert_eq!(p.cursor, Some(3));
+        p.sort_by(|a, b| a.path.cmp(&b.path));
+        assert_eq!(p.cursor, Some(0));
+        p.clear();
+        assert_eq!(p.cursor, None);
     }
 
     fn names(p: &Playlist) -> Vec<String> {
