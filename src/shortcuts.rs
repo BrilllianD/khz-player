@@ -26,6 +26,8 @@ pub enum Action {
     PlaySelected,
     SelectAll,
     Settings,
+    /// Elapsed / remaining time on the digits.
+    ToggleTimeDisplay,
     /// Move the playlist cursor; the bool extends the selection (Shift).
     Cursor(Move, bool),
     /// Move the selected block one row: -1 up, +1 down.
@@ -57,6 +59,7 @@ const BINDINGS: &[(Modifiers, Key, Action)] = &[
     (Modifiers::NONE, Key::Enter, Action::PlaySelected),
     (Modifiers::CTRL, Key::A, Action::SelectAll),
     (Modifiers::CTRL, Key::P, Action::Settings),
+    (Modifiers::CTRL, Key::T, Action::ToggleTimeDisplay),
 ];
 
 /// Consumed before BINDINGS while the playlist has focus. Ctrl and Shift
@@ -125,6 +128,13 @@ mod tests {
         assert_eq!(press(false, Modifiers::ALT, Key::L), [Action::ToggleLibrary]);
         assert_eq!(press(false, Modifiers::NONE, Key::L), [Action::AddFiles]);
         assert_eq!(press(false, Modifiers::CTRL, Key::P), [Action::Settings]);
+    }
+
+    #[test]
+    fn ctrl_t_toggles_time() {
+        let c = Modifiers::CTRL;
+        assert_eq!(press(false, c, Key::T), [Action::ToggleTimeDisplay]);
+        assert_eq!(press(true, c, Key::T), [Action::ToggleTimeDisplay]);
     }
 
     #[test]

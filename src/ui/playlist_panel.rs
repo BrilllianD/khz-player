@@ -518,11 +518,15 @@ fn footer(app: &mut App, ui: &mut Ui) {
             let sel = if pl.selected.is_empty() {
                 String::new()
             } else {
-                format!("{} sel / ", pl.selected.len())
+                format!(
+                    "{} sel {} / ",
+                    pl.selected.len(),
+                    format_duration(std::time::Duration::from_millis(pl.selected_duration_ms()))
+                )
             };
             let adding = if app.adding() { "adding… " } else { "" };
             ui.label(
-                RichText::new(format!("{adding}{sel}{} tracks  {}", pl.len(), format_duration(total)))
+                RichText::new(format!("{adding}{sel}{} tracks {}", pl.len(), format_duration(total)))
                     .monospace()
                     .color(theme.text_dim),
             );

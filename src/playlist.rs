@@ -86,6 +86,14 @@ impl Playlist {
         self.tracks.iter().filter_map(|t| t.duration_ms).sum()
     }
 
+    pub fn selected_duration_ms(&self) -> u64 {
+        self.selected
+            .iter()
+            .filter_map(|&i| self.tracks.get(i))
+            .filter_map(|t| t.duration_ms)
+            .sum()
+    }
+
     pub fn add(&mut self, tracks: impl IntoIterator<Item = Track>) {
         self.tracks.extend(tracks);
         self.invalidate_shuffle();
@@ -527,6 +535,17 @@ mod tests {
         let mut p = Playlist::new("t");
         p.add((0..n).map(|i| Track::from_path(PathBuf::from(format!("/m/{i}.mp3")))));
         p
+    }
+
+    #[test]
+    fn selected_duration_sums_selected_rows() {
+        let mut p = pl(3);
+        for (i, t) in p.tracks.iter_mut().enumerate() {
+            t.duration_ms = Some(1000 * (i as u64 + 1));
+        }
+        assert_eq!(p.selected_duration_ms(), 0);
+        p.selected = [0, 2].into();
+        assert_eq!(p.selected_duration_ms(), 4000);
     }
 
     #[test]

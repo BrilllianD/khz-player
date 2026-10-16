@@ -76,8 +76,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         format_duration(shown)
     };
     if widgets::digits(ui, digits_r, &time_text, &theme).clicked() {
-        app.cfg.time_remaining = !app.cfg.time_remaining;
-        app.mark_cfg();
+        app.dispatch(&ctx, Action::ToggleTimeDisplay);
     }
     // Play state glyph in the LCD corner; blinks while paused like Winamp.
     let glyph = match app.state {
@@ -213,6 +212,11 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         {
             app.audio.send(Command::Seek(d.mul_f32(f)));
         }
+        if let Some(p) = sresp.hover_pos()
+            && let Some(d) = dur
+        {
+            sresp.on_hover_text_at_pointer(format_duration(seek_time_at(p.x, seek_r, d)));
+        }
     } else {
         app.seek_drag = None;
     }
@@ -297,6 +301,14 @@ fn marquee_text(app: &App) -> String {
     format!("{idx}{}{dur}", t.display_name())
 }
 
+/// Track time under pointer `x` on a seek bar spanning `bar`.
+fn seek_time_at(x: f32, bar: Rect, dur: Duration) -> Duration {
+    if bar.width() <= 0.0 {
+        return Duration::ZERO;
+    }
+    dur.mul_f32(((x - bar.left()) / bar.width()).clamp(0.0, 1.0))
+}
+
 /// Vertical wheel movement this frame in notches; touchpad pixels count
 /// 50 to a notch.
 fn wheel_notches(i: &egui::InputState) -> f32 {
@@ -311,4 +323,21 @@ fn wheel_notches(i: &egui::InputState) -> f32 {
             _ => 0.0,
         })
         .sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn seek_time_at_maps_fraction() {
+        let bar = Rect::from_min_max(pos2(10.0, 0.0), pos2(110.0, 14.0));
+        let dur = Duration::from_secs(200);
+        let at = |x, bar| seek_time_at(x, bar, dur).as_secs_f32();
+        assert!((at(60.0, bar) - 100.0).abs() < 1e-3);
+        assert!(at(0.0, bar).abs() < 1e-3);
+        assert!((at(500.0, bar) - 200.0).abs() < 1e-3);
+        let flat = Rect::from_min_max(pos2(10.0, 0.0), pos2(10.0, 14.0));
+        assert!(at(50.0, flat).abs() < 1e-3);
+    }
 }

@@ -381,6 +381,10 @@ impl App {
             }
             Action::SelectAll => self.playlists[self.active].select_all(),
             Action::Settings => self.settings_open = true,
+            Action::ToggleTimeDisplay => {
+                self.cfg.time_remaining = !self.cfg.time_remaining;
+                self.mark_cfg();
+            }
         }
     }
 
