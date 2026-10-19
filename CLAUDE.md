@@ -4,6 +4,8 @@ Winamp-classic style music player in Rust. Design: `docs/design.md`.
 
 Before committing: `cargo test && cargo clippy --all-targets -- -D warnings`.
 
+Knowledge base: ~/mem/projects/khz-player/README.md (search: qmd search "<terms>" -c mem -n 8). Read it before non-trivial work; record decisions there.
+
 ## Tasks (yman)
 
 Tasks live in `.yman/` (local only, no remote yet).
