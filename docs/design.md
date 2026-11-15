@@ -81,7 +81,7 @@ src/
   shortcuts.rs       key map -> Action
   ui/mod.rs          layout root: main / eq / playlist stack, library SidePanel::right
   ui/main_panel.rs   title strip, digits, marquee, spectrum, kbps/kHz, seek, vol/bal, transport, toggles
-  ui/widgets.rs      custom painters: digits, marquee, spectrum, led_toggle, winamp_button
+  ui/widgets.rs      custom painters: digits (seven-segment LCD), marquee, spectrum, led_toggle, winamp_button
   ui/eq_panel.rs     ON/AUTO, preamp + 10 vertical sliders, presets ComboBox, save/delete preset
   ui/playlist_panel.rs tabs, list, ADD/REM/SEL/MISC/LIST menus, drag-drop, dbl-click
   ui/info_dialog.rs  File info modal (Alt+3, row menus) over a cloned Track; second CoverTexture
@@ -152,7 +152,7 @@ Library SidePanel::right 420 (Alt+L): search, rescan + ProgressBar, Artist > Alb
 ```
 Viewport: `with_inner_size([560,760]).with_min_inner_size([560,206]).with_decorations(false).with_app_id("khz-player")`. Resize on panel toggle via `ViewportCommand::InnerSize` (floating only). Layout fluid so tiled also works. Document Hyprland float rule for user.
 
-Stock egui: Slider (seek/vol/bal/`Slider::vertical()` EQ), Button, SelectableLabel, ComboBox, ScrollArea, CollapsingHeader, TextEdit, menu_button, ProgressBar. Custom paint via `allocate_painter`: digits (monospace 40pt), marquee (clipped galley, 40 px/s), spectrum bars (gradient lo→hi, 2px peak line), LED toggles. Style: `Visuals::dark()` + overrides, `CornerRadius::ZERO`, tight spacing → flat Winamp look.
+Stock egui: Slider (seek/vol/bal/`Slider::vertical()` EQ), Button, SelectableLabel, ComboBox, ScrollArea, CollapsingHeader, TextEdit, menu_button, ProgressBar. Custom paint via `allocate_painter`: digits (seven-segment, dim unlit segments), marquee (clipped galley, 40 px/s), spectrum bars (gradient lo→hi, 2px peak line), LED toggles. Style: `Visuals::dark()` + overrides, `CornerRadius::ZERO`, tight spacing → flat Winamp look.
 
 Fonts: try `config.font_path`, JetBrainsMono NF, CaskaydiaMono NF, then `fc-match -f '%{file}' monospace`; insert as first in Monospace and Proportional families; `set_fonts` once at startup.
 

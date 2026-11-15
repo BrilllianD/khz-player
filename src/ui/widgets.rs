@@ -15,17 +15,93 @@ pub fn lcd(ui: &Ui, rect: Rect, theme: &Theme) {
     p.rect_stroke(rect, CornerRadius::ZERO, Stroke::new(1.0, theme.frame), StrokeKind::Inside);
 }
 
-/// Large monospace time readout.
+/// Segment mask for a seven-segment cell: a=bit 0 (top), b, c, d (bottom), e, f, g=bit 6 (middle).
+fn segments(c: char) -> u8 {
+    match c {
+        '0' => 0x3F,
+        '1' => 0x06,
+        '2' => 0x5B,
+        '3' => 0x4F,
+        '4' => 0x66,
+        '5' => 0x6D,
+        '6' => 0x7D,
+        '7' => 0x07,
+        '8' => 0x7F,
+        '9' => 0x6F,
+        '-' => 0x40,
+        _ => 0,
+    }
+}
+
+/// Cell rects for `text`, left to right, right-aligned 10 px from the rect's right edge.
+/// Unsupported characters become blank digit cells.
+fn lcd_cells(text: &str, rect: Rect) -> Vec<(char, Rect)> {
+    let chars: Vec<char> = text
+        .chars()
+        .map(|c| if c.is_ascii_digit() || c == ':' || c == '-' { c } else { ' ' })
+        .collect();
+    let widths = |h: f32| -> Vec<f32> {
+        chars.iter().map(|&c| if c == ':' { 0.25 * h } else { 0.55 * h }).collect()
+    };
+    let total = |h: f32| -> f32 {
+        let n = chars.len();
+        widths(h).iter().sum::<f32>() + 0.15 * h * n.saturating_sub(1) as f32
+    };
+    let mut h = rect.height() * 0.6;
+    let avail = rect.width() - 36.0 - 10.0; // room left of the play glyph, minus the right margin
+    let t = total(h);
+    if t > avail && t > 0.0 {
+        h *= avail / t;
+    }
+    let ws = widths(h);
+    let gap = 0.15 * h;
+    let top = rect.center().y - h / 2.0;
+    let mut right = rect.right() - 10.0;
+    let mut out = Vec::with_capacity(chars.len());
+    for (&c, &w) in chars.iter().zip(&ws).rev() {
+        out.push((c, Rect::from_min_size(pos2(right - w, top), vec2(w, h))));
+        right -= w + gap;
+    }
+    out.reverse();
+    out
+}
+
+/// Large seven-segment time readout; unlit segments stay faintly visible.
 pub fn digits(ui: &mut Ui, rect: Rect, text: &str, theme: &Theme) -> Response {
     let resp = ui.allocate_rect(rect, Sense::click());
     lcd(ui, rect, theme);
-    ui.painter().text(
-        rect.right_center() - vec2(10.0, 0.0),
-        Align2::RIGHT_CENTER,
-        text,
-        FontId::monospace(rect.height() * 0.62),
-        theme.digits,
-    );
+    let p = ui.painter();
+    let lit = theme.digits;
+    let dim = theme.digits.gamma_multiply(0.12);
+    for (c, cell) in lcd_cells(text, rect) {
+        let t = 0.16 * cell.width();
+        if c == ':' {
+            for f in [1.0 / 3.0, 2.0 / 3.0] {
+                let ctr = pos2(cell.center().x, cell.top() + cell.height() * f);
+                p.rect_filled(Rect::from_center_size(ctr, vec2(t, t)), CornerRadius::ZERO, lit);
+            }
+            continue;
+        }
+        let (l, r, tp, b) = (cell.left(), cell.right(), cell.top(), cell.bottom());
+        let mid = cell.center().y;
+        let half = cell.height() / 2.0 - t;
+        let hbar = |y: f32| Rect::from_min_size(pos2(l + t, y), vec2(cell.width() - 2.0 * t, t));
+        let vbar = |x: f32, y: f32| Rect::from_min_size(pos2(x, y), vec2(t, half));
+        let segs = [
+            hbar(tp),
+            vbar(r - t, tp + t * 0.5),
+            vbar(r - t, mid),
+            hbar(b - t),
+            vbar(l, mid),
+            vbar(l, tp + t * 0.5),
+            hbar(mid - t / 2.0),
+        ];
+        let mask = segments(c);
+        for (i, s) in segs.iter().enumerate() {
+            let col = if mask & (1 << i) != 0 { lit } else { dim };
+            p.rect_filled(s.shrink(0.5), CornerRadius::ZERO, col);
+        }
+    }
     resp
 }
 
@@ -157,4 +233,32 @@ pub fn bar(
 pub fn small_label(ui: &Ui, pos: Pos2, align: Align2, text: &str, color: Color32) -> Rect {
     ui.painter()
         .text(pos, align, text, FontId::monospace(11.0), color)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn segments_table() {
+        assert_eq!(segments('8'), 0x7F);
+        assert_eq!(segments('1'), 0x06);
+        assert_eq!(segments('-'), 0x40);
+        assert_eq!(segments(' '), 0);
+        assert_eq!(segments('x'), 0);
+    }
+
+    #[test]
+    fn lcd_cells_right_aligned_and_fit() {
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(180.0, 60.0));
+        let cells = lcd_cells("12:34", rect);
+        assert_eq!(cells.len(), 5);
+        assert_eq!(cells[4].1.right(), rect.right() - 10.0);
+        assert!(cells[2].1.width() < cells[0].1.width());
+        let cells = lcd_cells("-1:23:45", rect);
+        for (_, c) in &cells {
+            assert!(rect.contains_rect(*c));
+        }
+        assert!(cells[0].1.left() >= rect.left() + 36.0 - 0.01);
+    }
 }
