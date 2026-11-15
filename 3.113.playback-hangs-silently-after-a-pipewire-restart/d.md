@@ -10,3 +10,7 @@ Also triggered by unplugging the default USB sink while playing (manual check 97
 
 on it
 
+## 2026-11-15T05:19:01Z — Bronnikov Aleksandr
+
+b15ce16: StallWatch in engine sets device_lost; output::retire drops old stream detached
+
