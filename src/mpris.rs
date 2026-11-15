@@ -13,6 +13,8 @@ use crate::playlist::Repeat;
 
 /// Well-known bus name of the running player; also the single-instance lock.
 pub const BUS_NAME: &str = "org.mpris.MediaPlayer2.khz-player";
+/// Method-call timeout of the notification connection: a daemon that never replies must not stall `update_loop`.
+const NOTIFY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[derive(Debug, Clone)]
 pub enum MprisAction {
@@ -388,7 +390,10 @@ async fn serve(
                 }
                 MprisUpdate::Notify { summary, body, icon } => {
                     if notify_conn.is_none() {
-                        notify_conn = mpris_server::zbus::Connection::session().await.ok();
+                        notify_conn = match mpris_server::zbus::connection::Builder::session() {
+                            Ok(b) => b.method_timeout(NOTIFY_TIMEOUT).build().await.ok(),
+                            Err(_) => None,
+                        };
                     }
                     match &notify_conn {
                         Some(conn) => {
