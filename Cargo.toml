@@ -11,7 +11,7 @@ rust-version = "1.98"
 [dependencies]
 eframe = { version = "0.36.2", default-features = false, features = ["glow", "wayland", "x11", "default_fonts"] }
 egui = "0.36.2"
-cpal = "0.18.2"
+cpal = { version = "0.18.2", features = ["pulseaudio"] }
 symphonia = { version = "0.6.1", default-features = false, features = ["mp3", "mp1", "mp2", "flac", "vorbis", "ogg", "aac", "alac", "adpcm", "isomp4", "aiff", "wav", "pcm", "id3v1", "id3v2", "ape", "opt-simd"] }
 rubato = "5.0.1"
 realfft = "3.5.0"

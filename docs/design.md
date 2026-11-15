@@ -22,7 +22,7 @@ rust-version = "1.98"
 [dependencies]
 eframe = { version = "0.36.2", default-features = false, features = ["glow", "wayland", "x11", "default_fonts"] }
 egui   = "0.36.2"
-cpal      = "0.18.2"
+cpal      = { version = "0.18.2", features = ["pulseaudio"] }
 symphonia = { version = "0.6.1", default-features = false, features = ["mp3", "flac", "vorbis", "ogg", "aac", "isomp4", "wav", "pcm"] }
 rubato    = "5.0.1"
 realfft   = "3.5.0"
@@ -116,6 +116,7 @@ pub enum Event { Loaded(TrackInfo), StateChanged(PlayerState), TrackEnded, Error
 - Gapless: `PrefetchNext` opens next decoder in advance; on EOF swap decoders without flush; send `TrackEnded` + `Loaded(next)`.
 - symphonia 0.6 API: `probe(&hint, mss, fmt_opts, meta_opts)`, `default_track(TrackType::Audio)`, `codec_params.audio()`, `make_audio_decoder`, `next_packet -> Result<Option<Packet>>`, `decode -> GenericAudioBufferRef`, `copy_to_vec_interleaved`. `enable_gapless: true`.
 - cpal 0.18 API: `default_output_config()` (expect 48000), force 2 ch, `BufferSize::Fixed(1024)` with Default fallback, request f32 else iterate `supported_output_configs`; `build_output_stream(config, cb, err, None)`, `stream.start()`.
+- cpal host: `cpal::default_host()` (PulseAudio via the pure-Rust `pulseaudio` crate, ALSA fallback; init timeout 2 s, so `reopen` can block the UI for up to 2 s while the server is gone). The host is logged on every open.
 - rubato 5: `Fft::<f32>::new(in_rate, out_rate, 1024, 2, FixedSync::Input)` with interleaved adapters; accumulate 1024-frame input chunks; reset on seek. Fallback: reopen stream at track rate.
 
 ### EQ (`audio/dsp.rs`)

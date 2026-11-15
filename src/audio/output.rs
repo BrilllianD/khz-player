@@ -43,15 +43,17 @@ pub struct OutputParts {
     pub rate: u32,
 }
 
-/// Opens the default output device. Does not touch `shared.out_rate`: the
+/// Opens the default output device of `cpal::default_host()` (PulseAudio when
+/// a server answers, else ALSA). Does not touch `shared.out_rate`: the
 /// caller hands `rate` to the engine together with `ring`, so position and
 /// rate change at the same moment. `repaint` wakes the UI when the stream
 /// fails for good.
 pub fn open(shared: Arc<Shared>, repaint: egui::Context) -> anyhow::Result<OutputParts> {
     let host = cpal::default_host();
+    let host_id = host.id();
     let device = host
         .default_output_device()
-        .ok_or_else(|| anyhow!("no default output device"))?;
+        .ok_or_else(|| anyhow!("no default output device (host {host_id})"))?;
     let device_name = device.to_string();
     let default = device
         .default_output_config()
@@ -97,7 +99,7 @@ pub fn open(shared: Arc<Shared>, repaint: egui::Context) -> anyhow::Result<Outpu
             continue;
         }
         tracing::info!(
-            "audio output: {device_name}, {format}, {} ch, {rate} Hz, buffer {:?}",
+            "audio output: host {host_id}, {device_name}, {format}, {} ch, {rate} Hz, buffer {:?}",
             config.channels,
             config.buffer_size
         );
@@ -112,7 +114,7 @@ pub fn open(shared: Arc<Shared>, repaint: egui::Context) -> anyhow::Result<Outpu
         });
     }
     Err(anyhow!(
-        "cannot open output stream: {}",
+        "cannot open output stream (host {host_id}): {}",
         last_err.unwrap_or_default()
     ))
 }

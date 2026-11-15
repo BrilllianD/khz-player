@@ -24,7 +24,9 @@ any distribution with glibc 2.35 or newer: Ubuntu 22.04+, Debian 12+, Fedora 36+
 Arch and its derivatives such as Omarchy.
 
 Runtime needs: ALSA (`alsa-lib` on Arch, `libasound2` on Debian and Ubuntu,
-`alsa-lib` on Fedora; on PipeWire systems also `pipewire-alsa`) and a Wayland
+`alsa-lib` on Fedora), `pipewire-pulse` or `pulseaudio` for the PulseAudio
+backend (without it, audio falls back to ALSA, and on PipeWire that goes
+through `pipewire-alsa`) and a Wayland
 or X11 desktop with OpenGL. A D-Bus session bus is optional, for MPRIS.
 
 ```sh
@@ -45,7 +47,8 @@ in `~/.config/khz-player` and `~/.local/share/khz-player` are kept.
 ## Build and run
 
 Needs Rust 1.98 or newer, plus ALSA development headers (`alsa-lib`).
-On PipeWire systems audio goes through `pipewire-alsa`.
+Audio uses the PulseAudio protocol (`pipewire-pulse`) when it is available and
+ALSA otherwise. No libpulse headers are needed.
 
 ```sh
 cargo run --release -- [files | folders | playlist.m3u]...
