@@ -139,8 +139,9 @@ Useful keys in `config.toml`:
 - `follow_omarchy_theme`: `true` (default) follows the current Omarchy theme; `false`
   uses the Winamp colours.
 
-`Ctrl+P` (or the gear in the title bar) opens the settings window, which edits the
-library folders, theme, animation frame rate, remaining-time display and font file.
+`Ctrl+P` (or the gear in the title bar) opens the settings window. It has four
+sections: Library (library folders, rescan), Playback, Audio, and Appearance (theme,
+animation frame rate, remaining-time display, font file).
 
 ## Hyprland
 

@@ -84,6 +84,7 @@ src/
   ui/playlist_panel.rs tabs, list, ADD/REM/SEL/MISC/LIST menus, drag-drop, dbl-click
   ui/library_panel.rs search, rescan + progress, Artist > Album > Track tree, add to playlist
   ui/jump_dialog.rs  J: filter current playlist, Enter plays
+  ui/settings.rs     Ctrl+P Modal: section list (Library, Playback, Audio, Appearance), one fn per section
 ```
 
 ## Threading
