@@ -23,6 +23,8 @@ pub enum Action {
     AddFiles,
     Jump,
     RemoveSelected,
+    /// Q: queue or unqueue the selection.
+    EnqueueSelected,
     PlaySelected,
     SelectAll,
     Settings,
@@ -55,6 +57,7 @@ const BINDINGS: &[(Modifiers, Key, Action)] = &[
     (Modifiers::ALT, Key::L, Action::ToggleLibrary),
     (Modifiers::NONE, Key::L, Action::AddFiles),
     (Modifiers::NONE, Key::J, Action::Jump),
+    (Modifiers::NONE, Key::Q, Action::EnqueueSelected),
     (Modifiers::NONE, Key::Delete, Action::RemoveSelected),
     (Modifiers::NONE, Key::Enter, Action::PlaySelected),
     (Modifiers::CTRL, Key::A, Action::SelectAll),
@@ -128,6 +131,12 @@ mod tests {
         assert_eq!(press(false, Modifiers::ALT, Key::L), [Action::ToggleLibrary]);
         assert_eq!(press(false, Modifiers::NONE, Key::L), [Action::AddFiles]);
         assert_eq!(press(false, Modifiers::CTRL, Key::P), [Action::Settings]);
+    }
+
+    #[test]
+    fn q_enqueues() {
+        assert_eq!(press(false, Modifiers::NONE, Key::Q), [Action::EnqueueSelected]);
+        assert_eq!(press(true, Modifiers::NONE, Key::Q), [Action::EnqueueSelected]);
     }
 
     #[test]

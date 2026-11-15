@@ -31,10 +31,11 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         .take(MAX_SHOWN)
         .collect();
 
-    let (up, down, enter) = ctx.input_mut(|i| {
+    let (up, down, ctrl_enter, enter) = ctx.input_mut(|i| {
         (
             i.consume_key(egui::Modifiers::NONE, Key::ArrowUp),
             i.consume_key(egui::Modifiers::NONE, Key::ArrowDown),
+            i.consume_key(egui::Modifiers::CTRL, Key::Enter),
             i.consume_key(egui::Modifiers::NONE, Key::Enter),
         )
     });
@@ -46,6 +47,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     }
     jump.cursor = jump.cursor.min(hits.len().saturating_sub(1));
 
+    let queue_pos: Vec<Option<usize>> = hits.iter().map(|&i| pl.queue_pos(i)).collect();
+    let highlighted = hits.get(jump.cursor).copied();
+    let mut queued = if ctrl_enter { highlighted } else { None };
     let mut chosen = if enter { hits.get(jump.cursor).copied() } else { None };
     let resp = Modal::new(Id::new("jump")).show(ctx, |ui| {
         ui.set_width(480.0);
@@ -70,9 +74,10 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 for (n, &i) in hits.iter().enumerate() {
                     let t = &pl.tracks[i];
                     let sel = n == jump.cursor;
+                    let tag = queue_pos[n].map(|k| format!(" [{}]", k + 1)).unwrap_or_default();
                     let r = ui.selectable_label(
                         sel,
-                        RichText::new(format!("{}. {}", i + 1, t.display_name()))
+                        RichText::new(format!("{}. {}{}", i + 1, t.display_name(), tag))
                             .monospace()
                             .color(if sel { theme.text_bright } else { theme.text }),
                     );
@@ -84,13 +89,19 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     }
                 }
             });
+        if ui.button("Enqueue").clicked() {
+            queued = highlighted;
+        }
         ui.label(
-            RichText::new("Enter play · Esc close · ↑↓ select")
+            RichText::new("Enter play · Ctrl+Enter enqueue · Esc close · ↑↓ select")
                 .small()
                 .color(theme.text_dim),
         );
     });
     let close = resp.should_close();
+    if let Some(i) = queued {
+        app.enqueue_row(i);
+    }
     if let Some(i) = chosen {
         app.jump = None;
         app.play_index(app.active, i);

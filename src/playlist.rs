@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
@@ -60,6 +60,8 @@ pub struct Playlist {
     resume_at: Option<usize>,
     shuffle_order: Vec<usize>,
     shuffle_pos: usize,
+    /// Play queue, session only: row indices played before anything else.
+    queue: VecDeque<usize>,
 }
 
 impl Playlist {
@@ -94,6 +96,58 @@ impl Playlist {
             .sum()
     }
 
+    /// 0-based position of row `index` in the play queue.
+    pub fn queue_pos(&self, index: usize) -> Option<usize> {
+        self.queue.iter().position(|&q| q == index)
+    }
+
+    /// Appends row `index` to the play queue unless it is queued already.
+    pub fn enqueue(&mut self, index: usize) {
+        if index < self.tracks.len() && self.queue_pos(index).is_none() {
+            self.queue.push_back(index);
+        }
+    }
+
+    /// Unqueues the rows when all of them are queued, else appends the ones
+    /// not yet queued in ascending order.
+    pub fn toggle_queued(&mut self, indices: &BTreeSet<usize>) {
+        let n = self.tracks.len();
+        let targets: Vec<usize> = indices.iter().copied().filter(|&i| i < n).collect();
+        if targets.is_empty() {
+            return;
+        }
+        if targets.iter().all(|&i| self.queue_pos(i).is_some()) {
+            self.queue.retain(|q| !targets.contains(q));
+        } else {
+            for i in targets {
+                self.enqueue(i);
+            }
+        }
+    }
+
+    /// Re-targets the queue after a reorder: `paths` are the queued tracks'
+    /// paths, taken before it. Each maps to its first row; misses and
+    /// duplicates drop out.
+    fn requeue_by_paths(&mut self, paths: Vec<std::path::PathBuf>) {
+        let mut queue = VecDeque::new();
+        for p in paths {
+            if let Some(i) = self.tracks.iter().position(|t| t.path == p)
+                && !queue.contains(&i)
+            {
+                queue.push_back(i);
+            }
+        }
+        self.queue = queue;
+    }
+
+    fn queued_paths(&self) -> Vec<std::path::PathBuf> {
+        self.queue
+            .iter()
+            .filter_map(|&q| self.tracks.get(q))
+            .map(|t| t.path.clone())
+            .collect()
+    }
+
     pub fn add(&mut self, tracks: impl IntoIterator<Item = Track>) {
         self.tracks.extend(tracks);
         self.invalidate_shuffle();
@@ -107,6 +161,7 @@ impl Playlist {
         self.selected.clear();
         self.anchor = None;
         self.cursor = None;
+        self.queue.clear();
         self.invalidate_shuffle();
         self.dirty = true;
     }
@@ -123,6 +178,7 @@ impl Playlist {
         let mut new_current = None;
         let mut resume_at = None;
         let mut kept = Vec::with_capacity(self.tracks.len());
+        let mut new_index: Vec<Option<usize>> = Vec::with_capacity(self.tracks.len());
         for (i, t) in std::mem::take(&mut self.tracks).into_iter().enumerate() {
             if self.resume_at == Some(i) {
                 resume_at = Some(kept.len());
@@ -131,11 +187,13 @@ impl Playlist {
                 if self.current == Some(i) {
                     resume_at = Some(kept.len());
                 }
+                new_index.push(None);
                 continue;
             }
             if self.current == Some(i) {
                 new_current = Some(kept.len());
             }
+            new_index.push(Some(kept.len()));
             kept.push(t);
         }
         if self.resume_at.is_some() && resume_at.is_none() {
@@ -143,6 +201,10 @@ impl Playlist {
             resume_at = Some(kept.len());
         }
         self.tracks = kept;
+        self.queue = std::mem::take(&mut self.queue)
+            .into_iter()
+            .filter_map(|q| new_index.get(q).copied().flatten())
+            .collect();
         self.current = new_current;
         self.resume_at = resume_at;
         if self.tracks.is_empty() {
@@ -234,7 +296,9 @@ impl Playlist {
             .cursor
             .and_then(|c| self.tracks.get(c))
             .map(|t| t.path.clone());
+        let queued = self.queued_paths();
         self.tracks.sort_by(|a, b| cmp(a, b));
+        self.requeue_by_paths(queued);
         self.current = cur_path.and_then(|p| self.tracks.iter().position(|t| t.path == p));
         self.cursor = cursor_path.and_then(|p| self.tracks.iter().position(|t| t.path == p));
         self.resume_at = None;
@@ -270,6 +334,7 @@ impl Playlist {
             .map(|&i| old[i].take().expect("index used once"))
             .collect();
         self.current = self.current.map(|c| new_pos[c]);
+        self.queue = self.queue.iter().map(|&q| new_pos[q]).collect();
         self.cursor = self.cursor.filter(|&c| c < n).map(|c| new_pos[c]);
         self.resume_at = None;
         self.anchor = self.anchor.map(|a| new_pos[a]);
@@ -333,6 +398,7 @@ impl Playlist {
         self.tracks.reverse();
         let n = self.tracks.len();
         self.current = self.current.map(|c| n - 1 - c);
+        self.queue = self.queue.iter().map(|&q| n - 1 - q).collect();
         self.cursor = self.cursor.map(|c| n - 1 - c);
         self.resume_at = None;
         self.selected.clear();
@@ -347,7 +413,9 @@ impl Playlist {
             .cursor
             .and_then(|c| self.tracks.get(c))
             .map(|t| t.path.clone());
+        let queued = self.queued_paths();
         self.tracks.shuffle(&mut rand::rng());
+        self.requeue_by_paths(queued);
         self.current = cur_path.and_then(|p| self.tracks.iter().position(|t| t.path == p));
         self.cursor = cursor_path.and_then(|p| self.tracks.iter().position(|t| t.path == p));
         self.resume_at = None;
@@ -411,6 +479,9 @@ impl Playlist {
         if self.tracks.is_empty() {
             return None;
         }
+        if let Some(&q) = self.queue.front() {
+            return Some(q);
+        }
         if auto && repeat == Repeat::One {
             return self.current.or(self.resume_row()).or(Some(0));
         }
@@ -453,6 +524,12 @@ impl Playlist {
     pub fn next(&mut self, repeat: Repeat, shuffle: bool, auto: bool) -> Option<usize> {
         if self.tracks.is_empty() {
             return None;
+        }
+        if let Some(q) = self.queue.pop_front() {
+            self.current = Some(q);
+            self.resume_at = None;
+            self.sync_shuffle_pos();
+            return self.current;
         }
         if auto && repeat == Repeat::One {
             self.current = self.current.or(self.resume_row()).or(Some(0));
@@ -521,6 +598,7 @@ impl Playlist {
         if index < self.tracks.len() {
             self.current = Some(index);
             self.resume_at = None;
+            self.queue.retain(|&q| q != index);
             self.sync_shuffle_pos();
         }
     }
@@ -955,5 +1033,105 @@ mod tests {
         let paths: Vec<_> = p.tracks.iter().map(|t| t.path.to_str().unwrap()).collect();
         assert_eq!(paths, ["/a.mp3", "/c.mp3", "/d.mp3", "/e.mp3"]);
         assert_eq!(p.current, Some(3));
+    }
+
+    fn queued_paths_of(p: &Playlist) -> Vec<String> {
+        p.queue
+            .iter()
+            .map(|&q| p.tracks[q].path.display().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn queue_overrides_linear_and_shuffle() {
+        for shuffle in [false, true] {
+            let mut p = pl(6);
+            p.set_current(0);
+            p.enqueue(4);
+            p.enqueue(2);
+            assert_eq!(p.peek_next(Repeat::Off, shuffle, true), Some(4));
+            assert_eq!(p.next(Repeat::Off, shuffle, true), Some(4));
+            assert_eq!(p.peek_next(Repeat::Off, shuffle, true), Some(2));
+            assert_eq!(p.next(Repeat::Off, shuffle, true), Some(2));
+            assert_eq!(p.queue_pos(2), None);
+            let after = p.peek_next(Repeat::Off, shuffle, true);
+            assert!(after.is_some());
+            assert_eq!(p.next(Repeat::Off, shuffle, true), after);
+        }
+    }
+
+    #[test]
+    fn queue_overrides_repeat_one_auto() {
+        let mut p = pl(4);
+        p.set_current(1);
+        p.enqueue(3);
+        assert_eq!(p.next(Repeat::One, false, true), Some(3));
+        assert_eq!(p.next(Repeat::One, false, true), Some(3));
+    }
+
+    #[test]
+    fn toggle_queued_adds_then_removes() {
+        let mut p = pl(5);
+        p.enqueue(3);
+        p.toggle_queued(&[1, 3, 4].into());
+        assert_eq!(p.queue, VecDeque::from([3, 1, 4]));
+        p.toggle_queued(&[1, 3, 4].into());
+        assert!(p.queue.is_empty());
+        p.toggle_queued(&[9].into());
+        assert!(p.queue.is_empty());
+    }
+
+    #[test]
+    fn queue_remaps_on_remove() {
+        let mut p = pl(6);
+        p.enqueue(4);
+        p.enqueue(1);
+        p.enqueue(5);
+        p.remove(&[0, 1].into());
+        assert_eq!(p.queue, VecDeque::from([2, 3]));
+        assert_eq!(queued_paths_of(&p), ["/m/4.mp3", "/m/5.mp3"]);
+    }
+
+    #[test]
+    fn queue_remaps_on_move_sort_reverse() {
+        let mut p = pl(5);
+        p.enqueue(1);
+        p.enqueue(4);
+        p.selected = [4].into();
+        assert!(p.move_selected(0));
+        assert_eq!(queued_paths_of(&p), ["/m/1.mp3", "/m/4.mp3"]);
+        p.reverse();
+        assert_eq!(queued_paths_of(&p), ["/m/1.mp3", "/m/4.mp3"]);
+        p.sort_by(|a, b| b.path.cmp(&a.path));
+        assert_eq!(queued_paths_of(&p), ["/m/1.mp3", "/m/4.mp3"]);
+        p.randomize();
+        assert_eq!(queued_paths_of(&p), ["/m/1.mp3", "/m/4.mp3"]);
+    }
+
+    #[test]
+    fn set_current_drops_from_queue() {
+        let mut p = pl(4);
+        p.enqueue(2);
+        p.enqueue(3);
+        p.set_current(2);
+        assert_eq!(p.queue, VecDeque::from([3]));
+    }
+
+    #[test]
+    fn clear_empties_queue() {
+        let mut p = pl(3);
+        p.enqueue(1);
+        p.clear();
+        assert!(p.queue.is_empty());
+    }
+
+    #[test]
+    fn queue_does_not_dirty() {
+        let mut p = pl(3);
+        p.dirty = false;
+        p.enqueue(1);
+        p.toggle_queued(&[2].into());
+        p.next(Repeat::Off, false, false);
+        assert!(!p.dirty);
     }
 }

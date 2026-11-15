@@ -369,6 +369,7 @@ impl App {
                 })
             }
             Action::RemoveSelected => self.remove_selected(),
+            Action::EnqueueSelected => self.enqueue_selected(),
             Action::PlaySelected => {
                 let pl = &self.playlists[self.active];
                 let row = pl

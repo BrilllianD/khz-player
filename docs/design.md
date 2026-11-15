@@ -73,7 +73,7 @@ src/
   library/db.rs      rusqlite open/migrate, tracks + playlists CRUD
   library/scanner.rs background thread: walkdir, mtime/size compare, lofty, batched inserts, progress
   library/tags.rs    lofty -> Track (title fallback = file stem)
-  playlist.rs        in-memory Playlist (Vec<Track>, cursor, shuffle order, repeat), next/prev
+  playlist.rs        in-memory Playlist (Vec<Track>, cursor, shuffle order, repeat, play queue (session only)), next/prev
   m3u.rs             parse/write M3U/M3U8 (#EXTM3U/#EXTINF, relative paths)
   mpris.rs           thread: mpris-server Player, zbus::block_on, Command sender + async_channel updates
   shortcuts.rs       key map -> Action

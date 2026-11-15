@@ -249,6 +249,28 @@ impl App {
         self.after_playlist_edit();
     }
 
+    /// Queues or unqueues the selected rows of the active list (the cursor row
+    /// when nothing is selected). The queue is session only: no config write.
+    pub fn enqueue_selected(&mut self) {
+        let pl = &mut self.playlists[self.active];
+        let targets = if pl.selected.is_empty() {
+            match pl.cursor {
+                Some(c) if c < pl.len() => std::collections::BTreeSet::from([c]),
+                _ => return,
+            }
+        } else {
+            pl.selected.clone()
+        };
+        pl.toggle_queued(&targets);
+        self.refresh_prefetch();
+    }
+
+    /// Appends row `index` of the active list to its queue.
+    pub fn enqueue_row(&mut self, index: usize) {
+        self.playlists[self.active].enqueue(index);
+        self.refresh_prefetch();
+    }
+
     pub fn add_library_tracks(&mut self, idx: &[usize], replace_and_play: bool) {
         let tracks: Vec<Track> = idx
             .iter()

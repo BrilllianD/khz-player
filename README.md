@@ -7,7 +7,7 @@ A Winamp-classic style music player for Linux, written in Rust.
 - Main window with time display, scrolling title, spectrum analyzer, volume and balance.
 - 10-band equalizer with presets (built-in and your own) and AUTO mode, which
   remembers the preset chosen for each track.
-- Several playlists, stored in SQLite; M3U import and export.
+- Several playlists, stored in SQLite; M3U import and export; a play queue (Q).
 - Media library scanned from your music folders, with a search box.
 - Gapless playback; MP3 (and MP1/MP2), FLAC, Ogg Vorbis, AAC and ALAC in
   M4A/MP4, WAV and AIFF. Opus, WavPack, APE and Musepack are not supported.
@@ -89,6 +89,7 @@ newer glibc.
 | `S` | Toggle shuffle |
 | `L` | Add files (opens the file dialog) |
 | `J` | Jump to a track by name |
+| `Q` | Queue / unqueue the selected tracks (played next, in order; Ctrl+Enter in the jump dialog) |
 | `↑` `↓` (playlist focused) | Move the cursor |
 | `Shift+↑` `Shift+↓` | Extend the selection |
 | `PgUp` `PgDn` `Home` `End` | Move the cursor by a page / to the ends; with `Shift`, extend the selection |

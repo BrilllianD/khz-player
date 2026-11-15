@@ -122,6 +122,7 @@ fn rows(app: &mut App, ui: &mut Ui) {
     let mut clicked: Option<(usize, egui::Modifiers)> = None;
     let mut play: Option<usize> = None;
     let mut remove_ctx = false;
+    let mut queue_ctx = false;
     // Drag-reorder: set when a row drag starts, cleared on release.
     let drag_id = egui::Id::new(("pl-drag", active));
     let mut dragging = ui.ctx().data(|d| d.get_temp::<bool>(drag_id)).unwrap_or(false);
@@ -202,9 +203,20 @@ fn rows(app: &mut App, ui: &mut Ui) {
                 font.clone(),
                 color,
             );
+            let mut name_right = dur_rect.left();
+            if let Some(k) = pl.queue_pos(i) {
+                let q_rect = painter.text(
+                    pos2(dur_rect.left() - 8.0, rect.center().y),
+                    Align2::RIGHT_CENTER,
+                    format!("[{}]", k + 1),
+                    font.clone(),
+                    theme.accent,
+                );
+                name_right = q_rect.left();
+            }
             let name_clip = Rect::from_min_max(
                 pos2(rect.left() + num_w, rect.top()),
-                pos2(dur_rect.left() - 8.0, rect.bottom()),
+                pos2(name_right - 8.0, rect.bottom()),
             );
             painter.with_clip_rect(name_clip).text(
                 pos2(name_clip.left(), rect.center().y),
@@ -236,6 +248,10 @@ fn rows(app: &mut App, ui: &mut Ui) {
             resp.context_menu(|ui| {
                 if ui.button("Play").clicked() {
                     play = Some(i);
+                    ui.close();
+                }
+                if ui.button("Queue / unqueue (Q)").clicked() {
+                    queue_ctx = true;
                     ui.close();
                 }
                 if ui.button("Remove selected").clicked() {
@@ -310,6 +326,9 @@ fn rows(app: &mut App, ui: &mut Ui) {
     }
     if remove_ctx {
         app.remove_selected();
+    }
+    if queue_ctx {
+        app.enqueue_selected();
     }
 }
 
