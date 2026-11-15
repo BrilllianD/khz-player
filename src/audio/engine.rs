@@ -16,6 +16,42 @@ use crate::audio::{Command, Event, PlayerState};
 const IDLE_WAIT: Duration = Duration::from_millis(5);
 const FLUSH_TIMEOUT: Duration = Duration::from_millis(100);
 const XRUN_LOG_INTERVAL: Duration = Duration::from_secs(10);
+/// How long `consumed` may stand still, with frames in the ring while
+/// playing, before the output counts as lost.
+const STALL_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Notices an output whose callback stopped without reporting an error.
+struct StallWatch {
+    consumed: i64,
+    since: Instant,
+    armed: bool,
+}
+
+impl StallWatch {
+    fn new(now: Instant) -> Self {
+        Self {
+            consumed: 0,
+            since: now,
+            armed: false,
+        }
+    }
+
+    /// True when `armed` held on this and every call since `since` and
+    /// `consumed` has not changed for `STALL_TIMEOUT`.
+    fn check(&mut self, armed: bool, consumed: i64, now: Instant) -> bool {
+        if !armed || !self.armed || consumed != self.consumed {
+            self.consumed = consumed;
+            self.since = now;
+            self.armed = armed;
+            return false;
+        }
+        if now.duration_since(self.since) >= STALL_TIMEOUT {
+            self.since = now;
+            return true;
+        }
+        false
+    }
+}
 
 /// Result of a background open: (generation, path, decoder).
 type Prefetched = (u64, PathBuf, anyhow::Result<Decoder>);
@@ -64,6 +100,8 @@ struct Engine {
     /// Xrun count at the last log line, and when it was written.
     last_xruns: u64,
     last_xrun_log: Instant,
+    /// Watchdog for a callback that stopped silently.
+    stall: StallWatch,
 }
 
 pub fn run(
@@ -97,6 +135,7 @@ pub fn run(
         eof: false,
         last_xruns: 0,
         last_xrun_log: Instant::now(),
+        stall: StallWatch::new(Instant::now()),
     };
     // The engine keeps a sender, so this never disconnects.
     let prefetched = e.prefetch_rx.clone();
@@ -138,6 +177,7 @@ pub fn run(
             e.fill();
         }
         e.check_progress();
+        e.check_stall(Instant::now());
     }
 }
 
@@ -526,6 +566,20 @@ impl Engine {
         self.last_xrun_log = Instant::now();
     }
 
+    /// Sets `device_lost` when the callback has stopped consuming while frames
+    /// wait in the ring; the app then reopens the output.
+    fn check_stall(&mut self, now: Instant) {
+        let armed = self.state == PlayerState::Playing
+            && !self.shared.device_lost.load(Ordering::Acquire)
+            && self.pushed_total > self.consumed();
+        if self.stall.check(armed, self.consumed(), now)
+            && !self.shared.device_lost.swap(true, Ordering::AcqRel)
+        {
+            tracing::warn!("audio output stalled: no callback for {STALL_TIMEOUT:?}, reopening");
+            self.repaint.request_repaint();
+        }
+    }
+
     fn check_progress(&mut self) {
         self.log_xruns();
         let consumed = self.consumed();
@@ -689,6 +743,7 @@ mod tests {
             eof: false,
             last_xruns: 0,
             last_xrun_log: Instant::now(),
+            stall: StallWatch::new(Instant::now()),
         };
         (e, ev_rx, ring_rx)
     }
@@ -769,6 +824,70 @@ mod tests {
         e.stop();
         assert!(!events.try_iter().any(|ev| matches!(ev, Event::Advanced(_))));
         assert_eq!(e.last_path.as_ref(), Some(&c));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn ms(t0: Instant, n: u64) -> Instant {
+        t0 + Duration::from_millis(n)
+    }
+
+    #[test]
+    fn stall_watch_trips_after_timeout_only_while_armed() {
+        let t0 = Instant::now();
+        let mut w = StallWatch::new(t0);
+        assert!(!w.check(true, 10, ms(t0, 0)));
+        assert!(!w.check(true, 10, ms(t0, 999)));
+        assert!(w.check(true, 10, ms(t0, 1000)));
+        assert!(!w.check(true, 10, ms(t0, 1005)));
+
+        let mut w = StallWatch::new(t0);
+        assert!(!w.check(true, 10, ms(t0, 0)));
+        assert!(!w.check(true, 11, ms(t0, 500)));
+        assert!(!w.check(true, 11, ms(t0, 1000)));
+        assert!(w.check(true, 11, ms(t0, 1500)));
+
+        let mut w = StallWatch::new(t0);
+        assert!(!w.check(false, 10, ms(t0, 0)));
+        assert!(!w.check(false, 10, ms(t0, 5000)));
+    }
+
+    #[test]
+    fn stall_watch_ignores_time_spent_disarmed() {
+        let t0 = Instant::now();
+        let mut w = StallWatch::new(t0);
+        assert!(!w.check(false, 10, ms(t0, 0)));
+        assert!(!w.check(true, 10, ms(t0, 60_000)));
+        assert!(!w.check(true, 10, ms(t0, 60_999)));
+        assert!(w.check(true, 10, ms(t0, 61_000)));
+    }
+
+    #[test]
+    fn check_stall_sets_device_lost_only_when_playing_with_frames() {
+        let dir = crate::config::test_dir("engine-stall");
+        let path = dir.join("t.wav");
+        crate::library::scanner::tests::write_wav(&path, 8000 * 2);
+        let (mut e, _events, _ring_rx) = test_engine();
+        e.load(path, true);
+        e.fill();
+        let t0 = Instant::now();
+        let lost = |e: &Engine| e.shared.device_lost.load(Ordering::Acquire);
+
+        e.set_state(PlayerState::Paused);
+        e.check_stall(ms(t0, 0));
+        e.check_stall(ms(t0, 2000));
+        assert!(!lost(&e));
+
+        e.set_state(PlayerState::Playing);
+        e.check_stall(ms(t0, 3000));
+        assert!(!lost(&e));
+        e.check_stall(ms(t0, 4000));
+        assert!(lost(&e));
+
+        e.shared.device_lost.store(false, Ordering::Release);
+        e.stop();
+        e.check_stall(ms(t0, 5000));
+        e.check_stall(ms(t0, 7000));
+        assert!(!lost(&e));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

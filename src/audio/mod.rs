@@ -111,7 +111,10 @@ impl AudioHandle {
         // Close the old stream first: a device that is still there may not
         // allow a second stream, and its callback must stop counting `consumed`
         // before the engine resyncs to the new ring.
-        self._output = None;
+        // A stalled stream may never close; `retire` leaks it after a timeout.
+        if let Some(old) = self._output.take() {
+            output::retire(old);
+        }
         self.tap = None;
         // Cleared before the new stream starts so an error it reports right
         // away is not lost.
@@ -148,6 +151,9 @@ impl Drop for AudioHandle {
         let _ = self.tx.send(Command::Shutdown);
         if let Some(t) = self.thread.take() {
             let _ = t.join();
+        }
+        if let Some(old) = self._output.take() {
+            output::retire(old);
         }
     }
 }

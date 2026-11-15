@@ -3,7 +3,8 @@
 //! No locks, no allocation in the steady state, no logging.
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use anyhow::{Context, anyhow};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -23,8 +24,13 @@ const FADE_SECONDS: f32 = 0.006;
 /// Time for the volume/balance gain to travel the full 0..1 range.
 const GAIN_RAMP_SECONDS: f32 = 0.010;
 
+/// How long `retire` waits for an old stream to close before leaking it.
+const CLOSE_TIMEOUT: Duration = Duration::from_millis(500);
+
 pub struct Output {
     _stream: cpal::Stream,
+    /// Set by `retire`: the callback then outputs silence and touches nothing.
+    retired: Arc<AtomicBool>,
 }
 
 pub struct OutputParts {
@@ -68,12 +74,14 @@ pub fn open(shared: Arc<Shared>, repaint: egui::Context) -> anyhow::Result<Outpu
         // them, so the returned ends always belong to the stream that started.
         let (ring_tx, ring_rx) = rtrb::RingBuffer::<f32>::new(ring_len);
         let (tap_tx, tap_rx) = rtrb::RingBuffer::<f32>::new(TAP_CAPACITY);
+        let retired = Arc::new(AtomicBool::new(false));
         let state = CallbackState::new(
             shared.clone(),
             ring_rx,
             tap_tx,
             rate,
             config.channels as usize,
+            retired.clone(),
         );
         let stream = match build(&device, format, config, state, repaint.clone()) {
             Ok(stream) => stream,
@@ -94,7 +102,10 @@ pub fn open(shared: Arc<Shared>, repaint: egui::Context) -> anyhow::Result<Outpu
             config.buffer_size
         );
         return Ok(OutputParts {
-            output: Output { _stream: stream },
+            output: Output {
+                _stream: stream,
+                retired,
+            },
             ring: ring_tx,
             tap: tap_rx,
             rate,
@@ -104,6 +115,36 @@ pub fn open(shared: Arc<Shared>, repaint: egui::Context) -> anyhow::Result<Outpu
         "cannot open output stream: {}",
         last_err.unwrap_or_default()
     ))
+}
+
+/// Closes an old output without blocking for long: its callback goes silent
+/// at once and the stream is dropped on a detached thread. A stream whose
+/// close hangs (sound server gone) is leaked after `CLOSE_TIMEOUT`.
+pub fn retire(old: Output) {
+    old.retired.store(true, Ordering::Release);
+    if !drop_detached(old, CLOSE_TIMEOUT) {
+        tracing::warn!("old audio stream did not close within {CLOSE_TIMEOUT:?}; leaking it");
+    }
+}
+
+/// Drops `value` on a thread named `audio-close`; true when that finished
+/// within `timeout`. The value stays with the thread if it hangs.
+fn drop_detached<T: Send + 'static>(value: T, timeout: Duration) -> bool {
+    let (tx, rx) = crossbeam_channel::bounded::<()>(1);
+    let spawned = std::thread::Builder::new()
+        .name("audio-close".into())
+        .spawn(move || {
+            drop(value);
+            let _ = tx.send(());
+        });
+    match spawned {
+        Ok(_) => rx.recv_timeout(timeout).is_ok(),
+        Err(e) => {
+            // The closure, and the value with it, was dropped inline.
+            tracing::warn!("cannot spawn audio-close thread: {e}");
+            true
+        }
+    }
 }
 
 /// Preferred device buffer, in frames.
@@ -269,6 +310,7 @@ struct CallbackState {
     /// Current left/right gain, ramped per frame toward `channel_gains(...)`.
     gain: (f32, f32),
     gain_step: f32,
+    retired: Arc<AtomicBool>,
 }
 
 impl CallbackState {
@@ -278,6 +320,7 @@ impl CallbackState {
         tap: rtrb::Producer<f32>,
         rate: u32,
         channels: usize,
+        retired: Arc<AtomicBool>,
     ) -> Self {
         let gain = channel_gains(shared.volume.load(), shared.balance.load());
         Self {
@@ -291,10 +334,15 @@ impl CallbackState {
             fade_step: 1.0 / (rate as f32 * FADE_SECONDS).max(1.0),
             gain,
             gain_step: 1.0 / (rate as f32 * GAIN_RAMP_SECONDS).max(1.0),
+            retired,
         }
     }
 
     fn fill<T: SizedSample + FromSample<f32>>(&mut self, data: &mut [T]) {
+        if self.retired.load(Ordering::Acquire) {
+            data.fill(T::EQUILIBRIUM);
+            return;
+        }
         let shared = &*self.shared;
         let ch = self.channels;
         let frames = data.len() / ch;
@@ -445,7 +493,11 @@ mod tests {
     ) -> (rtrb::Producer<f32>, rtrb::Consumer<f32>, CallbackState) {
         let (ring_tx, ring_rx) = rtrb::RingBuffer::<f32>::new(ring_len);
         let (tap_tx, tap_rx) = rtrb::RingBuffer::<f32>::new(tap_len);
-        let st = CallbackState::new(shared.clone(), ring_rx, tap_tx, RATE, 2);
+        let st = CallbackState::new(shared.clone(), ring_rx, tap_tx,
+            RATE,
+            2,
+            Arc::new(AtomicBool::new(false)),
+        );
         (ring_tx, tap_rx, st)
     }
 
@@ -476,6 +528,41 @@ mod tests {
         assert_eq!(ring.slots(), 1024, "ring still holds samples");
         assert_eq!(shared.consumed.load(Ordering::Acquire), 0);
         assert!(out.iter().all(|&s| s == 0.0));
+    }
+
+    #[test]
+    fn fill_retired_outputs_silence_and_touches_nothing() {
+        let shared = Arc::new(Shared::new(1.0, 0.0));
+        let (mut ring, _tap, mut st) = callback(&shared, 1024, 64);
+        push(&mut ring, &[(0.5, 0.5); 100]);
+        shared.flush.store(true, Ordering::Release);
+        let slots = ring.slots();
+        st.retired.store(true, Ordering::Release);
+
+        let mut f = [1.0f32; 64];
+        st.fill(&mut f);
+        let mut u = [1u16; 64];
+        st.fill(&mut u);
+
+        assert!(f.iter().all(|&s| s == f32::EQUILIBRIUM));
+        assert!(u.iter().all(|&s| s == u16::EQUILIBRIUM));
+        assert!(shared.flush.load(Ordering::Acquire));
+        assert_eq!(shared.consumed.load(Ordering::Acquire), 0);
+        assert_eq!(ring.slots(), slots);
+    }
+
+    #[test]
+    fn drop_detached_returns_false_when_drop_blocks() {
+        struct Slow;
+        impl Drop for Slow {
+            fn drop(&mut self) {
+                std::thread::sleep(Duration::from_millis(300));
+            }
+        }
+        let t = std::time::Instant::now();
+        assert!(!drop_detached(Slow, Duration::from_millis(50)));
+        assert!(t.elapsed() < Duration::from_millis(200));
+        assert!(drop_detached(5u32, Duration::from_millis(500)));
     }
 
     #[test]
