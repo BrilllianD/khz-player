@@ -33,7 +33,13 @@ pub fn clear_cache() -> std::io::Result<()> {
 fn find_in(track: &Path, cache: &Path) -> Option<PathBuf> {
     embedded(track)
         .and_then(|d| cache_picture(&d, cache))
-        .or_else(|| folder_cover(track.parent()?))
+        .or_else(|| folder_cover(track_dir(track)?))
+}
+
+/// Folder of `track`; a bare relative path has an empty parent, which is the current dir.
+fn track_dir(track: &Path) -> Option<&Path> {
+    let dir = track.parent()?;
+    Some(if dir.as_os_str().is_empty() { Path::new(".") } else { dir })
 }
 
 fn embedded(track: &Path) -> Option<Vec<u8>> {
@@ -53,19 +59,14 @@ fn embedded(track: &Path) -> Option<Vec<u8>> {
 }
 
 fn pick_picture(tags: &[Tag]) -> Option<&Picture> {
-    let mut pics = tags
-        .iter()
-        .flat_map(|t| t.pictures())
-        .filter(|p| image_ext(p.data()).is_some());
-    let first = pics.next()?;
-    if first.pic_type() == PictureType::CoverFront {
-        return Some(first);
-    }
-    let rest: Vec<&Picture> = pics.collect();
-    rest.iter()
+    let pics = || {
+        tags.iter()
+            .flat_map(|t| t.pictures())
+            .filter(|p| image_ext(p.data()).is_some())
+    };
+    pics()
         .find(|p| p.pic_type() == PictureType::CoverFront)
-        .copied()
-        .or(Some(first))
+        .or_else(|| pics().next())
 }
 
 fn image_ext(data: &[u8]) -> Option<&'static str> {
@@ -225,6 +226,14 @@ mod tests {
         fs::write(dir.join("track.mp3"), b"xx").unwrap();
         assert_eq!(find_in(&dir.join("track.mp3"), &dir.join("cache")), None);
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn bare_relative_track_uses_current_dir() {
+        assert_eq!(track_dir(Path::new("track.mp3")), Some(Path::new(".")));
+        assert_eq!(track_dir(Path::new("a/track.mp3")), Some(Path::new("a")));
+        assert_eq!(track_dir(Path::new("/track.mp3")), Some(Path::new("/")));
+        assert_eq!(track_dir(Path::new("/")), None);
     }
 
     #[test]

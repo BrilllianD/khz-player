@@ -62,6 +62,9 @@ pub struct Shared {
     /// the old ring meanwhile, so `device_lost` is free to record an error of
     /// the new stream.
     pub reopening: AtomicBool,
+    /// Bumped by every `AudioHandle::reopen`; `SetOutput` carries it, so a stale
+    /// one cannot end the `reopening` of a newer reopen.
+    pub reopen_gen: AtomicU64,
 }
 
 impl Shared {
@@ -85,6 +88,7 @@ impl Shared {
             xruns: AtomicU64::new(0),
             device_lost: AtomicBool::new(false),
             reopening: AtomicBool::new(false),
+            reopen_gen: AtomicU64::new(0),
         }
     }
 

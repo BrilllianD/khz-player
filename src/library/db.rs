@@ -110,17 +110,28 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // ReplayGain columns. Unlike v4 the rows stay: mtime = -1 never matches a file
         // stamp, so the next scan re-reads every file, and App::new starts that scan
         // (`needs_rescan`).
-        conn.execute_batch(
-            "BEGIN; \
-             ALTER TABLE tracks ADD COLUMN rg_track_gain REAL; \
-             ALTER TABLE tracks ADD COLUMN rg_track_peak REAL; \
-             ALTER TABLE tracks ADD COLUMN rg_album_gain REAL; \
-             ALTER TABLE tracks ADD COLUMN rg_album_peak REAL; \
-             UPDATE tracks SET mtime = -1; \
-             PRAGMA user_version = 6; COMMIT;",
-        )?;
+        // Another instance may have added some columns already: skip those.
+        let mut sql = String::from("BEGIN; ");
+        for col in ["rg_track_gain", "rg_track_peak", "rg_album_gain", "rg_album_peak"] {
+            if !has_column(conn, "tracks", col)? {
+                sql.push_str(&format!("ALTER TABLE tracks ADD COLUMN {col} REAL; "));
+            }
+        }
+        sql.push_str("UPDATE tracks SET mtime = -1; PRAGMA user_version = 6; COMMIT;");
+        conn.execute_batch(&sql)?;
     }
     Ok(())
+}
+
+fn has_column(conn: &Connection, table: &str, col: &str) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let names = stmt.query_map([], |r| r.get::<_, String>(1))?;
+    for name in names {
+        if name? == col {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn path_bytes(p: &Path) -> &[u8] {
@@ -414,6 +425,31 @@ mod tests {
             duration_ms: Some(1000),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn v6_migration_tolerates_a_column_added_by_another_instance() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_V1).unwrap();
+        conn.execute_batch("PRAGMA user_version = 5;").unwrap();
+        conn.execute_batch("ALTER TABLE tracks ADD COLUMN rg_track_gain REAL;").unwrap();
+        conn.execute(
+            "INSERT INTO tracks (path, mtime, size) VALUES (CAST('/m/a.mp3' AS BLOB), 7, 2)",
+            [],
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        let v: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
+        let (n, mtime): (i64, i64) = conn
+            .query_row("SELECT COUNT(*), MIN(mtime) FROM tracks", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!((n, mtime), (1, -1));
+        assert!(has_column(&conn, "tracks", "rg_album_peak").unwrap());
     }
 
     #[test]

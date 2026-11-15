@@ -300,7 +300,7 @@ impl Engine {
                 }
             }
             Command::PrefetchNext(next) => self.prefetch(next),
-            Command::SetOutput { ring, rate } => self.set_output(ring, rate),
+            Command::SetOutput { ring, rate, generation } => self.set_output(ring, rate, generation),
             Command::Shutdown => return false,
         }
         true
@@ -402,9 +402,12 @@ impl Engine {
     /// the current track restarts from the position last heard, resampled to
     /// the new rate. The state is kept: paused stays paused. The prefetched
     /// decoder is dropped; the app announces the next track again.
-    fn set_output(&mut self, ring: rtrb::Producer<f32>, rate: u32) {
+    fn set_output(&mut self, ring: rtrb::Producer<f32>, rate: u32, generation: u64) {
         // First: the seek below flushes and must wait for the new callback.
-        self.shared.reopening.store(false, Ordering::Release);
+        // A stale `SetOutput` (an older reopen) must not end a newer one.
+        if generation == self.shared.reopen_gen.load(Ordering::Acquire) {
+            self.shared.reopening.store(false, Ordering::Release);
+        }
         // A pending gapless successor is already the current decoder and none
         // of it was heard yet: it starts from zero (`seek` announces it).
         let pos = if self.transitions.is_empty() {
@@ -795,6 +798,23 @@ mod tests {
             .expect("prefetch result")
     }
 
+    /// Drops the engine's own sender: from now on only in-flight opens hold one.
+    fn detach_prefetch_tx(e: &mut Engine) {
+        e.prefetch_tx = crossbeam_channel::unbounded().0;
+    }
+
+    /// Every open has reported and no further one is in flight: the channel is
+    /// disconnected once the last open thread drops its sender.
+    fn assert_no_more_prefetch(e: &Engine) {
+        assert!(
+            matches!(
+                e.prefetch_rx.recv_timeout(Duration::from_secs(5)),
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected)
+            ),
+            "an extra open was started"
+        );
+    }
+
     /// `prefetch` and wait until its result is applied, as the run loop would.
     fn prefetch_now(e: &mut Engine, path: PathBuf) {
         prefetch_now_gain(e, path, ReplayGain::default());
@@ -820,17 +840,19 @@ mod tests {
         // Same path again while in flight: no new open.
         e.prefetch(Some((b.clone(), ReplayGain::default())));
         assert_eq!(e.pending.as_ref(), Some(&b));
+        detach_prefetch_tx(&mut e);
         // Deliver A's stale result last, the worst order.
         let mut results = [recv_prefetch(&e), recv_prefetch(&e)];
         results.sort_by_key(|r| r.1 == a);
         for r in results {
             e.prefetched(r);
         }
-        assert!(e.prefetch_rx.try_recv().is_err());
+        assert_no_more_prefetch(&e);
         assert!(e.pending.is_none());
         assert_eq!(e.next.as_ref().map(|(p, _, _)| p), Some(&b));
 
         // A stop makes an open in flight stale too.
+        (e.prefetch_tx, e.prefetch_rx) = crossbeam_channel::unbounded();
         e.prefetch(Some((a, ReplayGain::default())));
         e.stop();
         let r = recv_prefetch(&e);
@@ -954,7 +976,7 @@ mod tests {
         events.try_iter().for_each(drop);
 
         let (ring, new_rx) = rtrb::RingBuffer::new(44100 * 2 * 3 / 10);
-        assert!(e.handle(Command::SetOutput { ring, rate: 44100 }));
+        assert!(e.handle(Command::SetOutput { ring, rate: 44100, generation: 0 }));
         assert_eq!(e.out_rate, 44100);
         assert_eq!(e.shared.out_rate(), 44100);
         assert_eq!(e.state, PlayerState::Playing);
@@ -988,13 +1010,26 @@ mod tests {
         events.try_iter().for_each(drop);
 
         let (ring, _new_rx) = rtrb::RingBuffer::new(1024);
-        e.handle(Command::SetOutput { ring, rate: 44100 });
+        e.handle(Command::SetOutput { ring, rate: 44100, generation: 0 });
         let evs: Vec<Event> = events.try_iter().collect();
         assert!(matches!(evs.first(), Some(Event::Advanced(i)) if i.path == b), "{evs:?}");
         assert!(e.transitions.is_empty());
         assert_eq!(e.last_path.as_ref(), Some(&b));
         assert_eq!(e.position(), Duration::ZERO);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn stale_set_output_keeps_newer_reopen_pending() {
+        let (mut e, _events, _old_rx) = test_engine();
+        e.shared.reopen_gen.store(2, Ordering::Release);
+        e.shared.reopening.store(true, Ordering::Release);
+        let (ring, _rx) = rtrb::RingBuffer::new(1024);
+        e.handle(Command::SetOutput { ring, rate: 44100, generation: 1 });
+        assert!(e.shared.reopening.load(Ordering::Acquire));
+        let (ring, _rx2) = rtrb::RingBuffer::new(1024);
+        e.handle(Command::SetOutput { ring, rate: 44100, generation: 2 });
+        assert!(!e.shared.reopening.load(Ordering::Acquire));
     }
 
     #[test]
@@ -1016,7 +1051,7 @@ mod tests {
         // The new stream reports an error before the engine takes its ring.
         e.shared.device_lost.store(true, Ordering::Release);
         let (ring, _new_rx) = rtrb::RingBuffer::new(44100 * 2 * 3 / 10);
-        e.handle(Command::SetOutput { ring, rate: 44100 });
+        e.handle(Command::SetOutput { ring, rate: 44100, generation: 0 });
         assert!(!e.shared.reopening.load(Ordering::Acquire));
         assert!(e.shared.device_lost.load(Ordering::Acquire));
         std::fs::remove_dir_all(dir).unwrap();
@@ -1136,15 +1171,15 @@ mod tests {
         e.prefetch(Some((b.clone(), gain_db(-1.0))));
         e.prefetch(Some((b.clone(), gain_db(-2.0))));
         assert_eq!(e.pending.as_ref(), Some(&b));
+        detach_prefetch_tx(&mut e);
         let r = recv_prefetch(&e);
         e.prefetched(r);
-        assert!(e.prefetch_rx.try_recv().is_err());
+        assert_no_more_prefetch(&e);
         assert_eq!(e.next.as_ref().map(|n| n.2), Some(gain_db(-2.0)));
         // Arrived.
         e.prefetch(Some((b.clone(), gain_db(-4.0))));
         assert!(e.pending.is_none());
         assert_eq!(e.next.as_ref().map(|n| n.2), Some(gain_db(-4.0)));
-        assert!(e.prefetch_rx.try_recv().is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

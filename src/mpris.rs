@@ -397,9 +397,14 @@ async fn serve(
                     }
                     match &notify_conn {
                         Some(conn) => {
-                            notify(conn, notify_id, &summary, &body, icon.as_deref())
+                            let r = notify(conn, notify_id, &summary, &body, icon.as_deref())
                                 .await
-                                .map(|id| notify_id = id)
+                                .map(|id| notify_id = id);
+                            if r.is_err() {
+                                // The bus may have restarted: reconnect next time.
+                                notify_conn = None;
+                            }
+                            r
                         }
                         None => Ok(()),
                     }

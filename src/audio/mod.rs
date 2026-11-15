@@ -40,7 +40,11 @@ pub enum Command {
     /// Opens the next track ahead of time for gapless playback.
     PrefetchNext(Option<(PathBuf, ReplayGain)>),
     /// The output was reopened: feed `ring` at `rate` from now on.
-    SetOutput { ring: rtrb::Producer<f32>, rate: u32 },
+    SetOutput {
+        ring: rtrb::Producer<f32>,
+        rate: u32,
+        generation: u64,
+    },
     Shutdown,
 }
 
@@ -130,6 +134,7 @@ impl AudioHandle {
         // `reopening` keeps the stall watch and flush waits off the old ring
         // until `SetOutput` arrives, however long `open` takes. `device_lost`
         // is cleared before `open`, so an error of the new stream stays set.
+        let generation = self.shared.reopen_gen.fetch_add(1, Ordering::AcqRel) + 1;
         self.shared.reopening.store(true, Ordering::Release);
         self.shared.device_lost.store(false, Ordering::Release);
         let p = match output::open(self.shared.clone(), self.repaint.clone(), device) {
@@ -144,10 +149,17 @@ impl AudioHandle {
         self.tap = Some(p.tap);
         self.init_error = None;
         self.device_fallback = p.fell_back;
-        self.send(Command::SetOutput {
+        let sent = self.tx.send(Command::SetOutput {
             ring: p.ring,
             rate: p.rate,
+            generation,
         });
+        if sent.is_err() {
+            // The engine thread is gone: nobody will take the ring.
+            self.shared.reopening.store(false, Ordering::Release);
+            self.shared.device_lost.store(true, Ordering::Release);
+            anyhow::bail!("audio engine stopped");
+        }
         Ok(p.rate)
     }
 

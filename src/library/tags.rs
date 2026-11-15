@@ -152,22 +152,27 @@ pub fn read(path: &Path) -> Track {
         apply_tag(&mut t, tag);
     }
     // mp3gain writes APEv2 next to ID3v2: take the gain from any tag that carries it.
-    if t.replay_gain == ReplayGain::default()
-        && let Some(rg) = tagged
-            .tags()
-            .iter()
-            .map(replay_gain)
-            .find(|rg| *rg != ReplayGain::default())
-    {
-        t.replay_gain = rg;
+    if t.replay_gain == ReplayGain::default() {
+        t.replay_gain = pick_replay_gain(tagged.primary_tag(), tagged.tags());
     }
     t
+}
+
+/// ReplayGain of the primary tag if it has any, else of the first other tag that does.
+fn pick_replay_gain(primary: Option<&Tag>, all: &[Tag]) -> ReplayGain {
+    primary
+        .into_iter()
+        .chain(all)
+        .map(replay_gain)
+        .find(|rg| *rg != ReplayGain::default())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         AUDIO_EXTENSIONS, apply_tag, decode_cp1251, fix_cp1251, is_audio, is_lost, parse_rg,
+        pick_replay_gain,
     };
     use crate::library::{ReplayGain, Track};
     use lofty::prelude::*;
@@ -214,6 +219,24 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn replay_gain_falls_back_to_secondary_tag_and_primary_wins() {
+        let mut id3 = Tag::new(TagType::Id3v2);
+        id3.set_title("t".into());
+        let mut ape = Tag::new(TagType::Ape);
+        ape.insert_text(ItemKey::ReplayGainTrackGain, "-5.00 dB".into());
+        let tags = [id3.clone(), ape.clone()];
+        let rg = pick_replay_gain(Some(&tags[0]), &tags);
+        assert_eq!(rg.track_gain_db, Some(-5.0));
+
+        id3.insert_text(ItemKey::ReplayGainTrackGain, "-9.00 dB".into());
+        let tags = [ape, id3];
+        let rg = pick_replay_gain(Some(&tags[1]), &tags);
+        assert_eq!(rg.track_gain_db, Some(-9.0));
+
+        assert_eq!(pick_replay_gain(None, &[]), ReplayGain::default());
     }
 
     #[test]
