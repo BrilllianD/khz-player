@@ -1056,6 +1056,13 @@ mod tests {
             assert_eq!(p.queue_pos(2), None);
             let after = p.peek_next(Repeat::Off, shuffle, true);
             assert!(after.is_some());
+            if shuffle {
+                // Playback continues from the last queued track's shuffle slot.
+                let pos = p.shuffle_order.iter().position(|&i| i == 2).unwrap();
+                assert_eq!(after, p.shuffle_order.get(pos + 1).copied());
+            } else {
+                assert_eq!(after, Some(3));
+            }
             assert_eq!(p.next(Repeat::Off, shuffle, true), after);
         }
     }

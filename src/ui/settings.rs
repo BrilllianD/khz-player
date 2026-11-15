@@ -166,7 +166,7 @@ fn playback(app: &mut App, ui: &mut egui::Ui) {
 
 fn audio(app: &mut App, ui: &mut egui::Ui) {
     use crate::config::ReplayGainMode as M;
-    ui.label("ReplayGain");
+    ui.label(RichText::new("ReplayGain").strong());
     let mut mode = app.cfg.replaygain.mode;
     ui.horizontal(|ui| {
         ui.label("Mode");

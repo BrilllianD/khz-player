@@ -74,7 +74,8 @@ pub fn digits(ui: &mut Ui, rect: Rect, text: &str, theme: &Theme) -> Response {
     let lit = theme.digits;
     let dim = theme.digits.gamma_multiply(0.12);
     for (c, cell) in lcd_cells(text, rect) {
-        let t = 0.16 * cell.width();
+        // Same thickness for every cell: 0.16 of a digit cell's width (0.55 of its height).
+        let t = 0.16 * 0.55 * cell.height();
         if c == ':' {
             for f in [1.0 / 3.0, 2.0 / 3.0] {
                 let ctr = pos2(cell.center().x, cell.top() + cell.height() * f);
@@ -90,9 +91,9 @@ pub fn digits(ui: &mut Ui, rect: Rect, text: &str, theme: &Theme) -> Response {
         let segs = [
             hbar(tp),
             vbar(r - t, tp + t * 0.5),
-            vbar(r - t, mid),
+            vbar(r - t, mid + t * 0.5),
             hbar(b - t),
-            vbar(l, mid),
+            vbar(l, mid + t * 0.5),
             vbar(l, tp + t * 0.5),
             hbar(mid - t / 2.0),
         ];

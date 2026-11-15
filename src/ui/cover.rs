@@ -98,11 +98,27 @@ impl CoverTexture {
 mod tests {
     use super::*;
 
-    fn tmp(name: &str) -> PathBuf {
+    /// Temp dir removed on drop.
+    struct Tmp(PathBuf);
+
+    impl std::ops::Deref for Tmp {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Tmp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn tmp(name: &str) -> Tmp {
         let d = std::env::temp_dir().join(format!("khz-cover-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
-        d
+        Tmp(d)
     }
 
     fn png(dir: &Path, name: &str, w: u32, h: u32) -> PathBuf {

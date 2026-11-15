@@ -91,6 +91,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             });
         if ui.button("Enqueue").clicked() {
             queued = highlighted;
+            te.request_focus();
         }
         ui.label(
             RichText::new("Enter play · Ctrl+Enter enqueue · Esc close · ↑↓ select")

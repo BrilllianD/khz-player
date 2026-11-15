@@ -33,7 +33,8 @@ use persist::should_save;
 use playlists::{AddJob, AddRequest, AddTarget};
 
 pub const DOUBLE_ZOOM: f32 = 2.0;
-const ZOOM_SETTLE: Duration = Duration::from_millis(500);
+/// Longest wait after a zoom change for the window to reach its target size.
+const ZOOM_SETTLE: Duration = Duration::from_secs(2);
 const TOAST_TIME: Duration = Duration::from_secs(5);
 
 /// Text prompt shown as a modal (no native file dialogs).
@@ -475,8 +476,8 @@ impl eframe::App for App {
 
         self.handle_audio_events();
         self.handle_cover_events();
-        let want = if self.cfg.show_cover { self.cover.clone() } else { None };
-        self.cover_tex.sync(ctx, want.as_deref());
+        let want = self.cover.as_deref().filter(|_| self.cfg.show_cover);
+        self.cover_tex.sync(ctx, want);
         self.handle_output_loss(now);
         self.handle_sleep(now);
         self.handle_scan_events();

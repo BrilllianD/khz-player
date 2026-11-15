@@ -48,8 +48,14 @@ impl App {
     }
 
     pub(super) fn remember_window(&mut self, ctx: &egui::Context) {
-        if self.zoom_pending || self.zoom_settle.is_some_and(|t| Instant::now() < t) {
+        if self.zoom_pending {
             return;
+        }
+        if let Some(deadline) = self.zoom_settle {
+            if !zoom_settled(ctx.content_rect().size(), window_size(&self.cfg), Instant::now(), deadline) {
+                return;
+            }
+            self.zoom_settle = None;
         }
         let h = ctx.content_rect().height().round();
         // Tiled or squeezed heights would reopen a floating window with no room
@@ -78,6 +84,12 @@ impl App {
     }
 }
 
+/// After a zoom change the window may still be mid-resize: settled once its
+/// content size is within 2 px of the wanted size on both axes, or at `deadline`.
+pub(super) fn zoom_settled(content: egui::Vec2, wanted: egui::Vec2, now: Instant, deadline: Instant) -> bool {
+    now >= deadline || ((content.x - wanted.x).abs() <= 2.0 && (content.y - wanted.y).abs() <= 2.0)
+}
+
 /// Debounce: save once changes stop for `SAVE_DEBOUNCE`, or after
 /// `SAVE_CAP` of continuous changes.
 pub(super) fn should_save(first: Option<Instant>, last: Option<Instant>, now: Instant) -> bool {
@@ -104,5 +116,16 @@ mod tests {
         // Changes every 500 ms never go quiet, but the cap saves at 10 s.
         assert!(!should_save(Some(t0), Some(ms(9500)), ms(9900)));
         assert!(should_save(Some(t0), Some(ms(9500)), ms(10_000)));
+    }
+
+    #[test]
+    fn zoom_settles_on_size_or_deadline() {
+        let t0 = Instant::now();
+        let dl = t0 + Duration::from_secs(2);
+        let want = egui::vec2(275.0, 400.0);
+        assert!(!zoom_settled(egui::vec2(550.0, 800.0), want, t0, dl));
+        assert!(!zoom_settled(egui::vec2(275.0, 403.0), want, t0, dl));
+        assert!(zoom_settled(egui::vec2(276.5, 398.5), want, t0, dl));
+        assert!(zoom_settled(egui::vec2(550.0, 800.0), want, dl, dl));
     }
 }

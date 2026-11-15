@@ -73,7 +73,7 @@ fn armed_label(stop_after: bool, sleep: Sleep, now: Instant) -> Option<String> {
         Sleep::Armed { deadline } => {
             let left = deadline.saturating_duration_since(now);
             let secs = left.as_secs() + u64::from(left.subsec_nanos() > 0);
-            if secs >= 60 {
+            if left >= Duration::from_secs(60) {
                 parts.push(format!("SLEEP {}m", secs.div_ceil(60)));
             } else {
                 parts.push(format!("SLEEP {secs}s"));
@@ -373,6 +373,15 @@ mod tests {
         );
         let a = Sleep::Armed { deadline: t0 + Duration::from_millis(44_200) };
         assert_eq!(armed_label(false, a, t0).as_deref(), Some("SLEEP 45s"));
+        let at = |d: Duration| Sleep::Armed { deadline: t0 + d };
+        assert_eq!(
+            armed_label(false, at(secs(29 * 60 + 30)), t0).as_deref(),
+            Some("SLEEP 30m")
+        );
+        assert_eq!(
+            armed_label(false, at(Duration::from_millis(59_400)), t0).as_deref(),
+            Some("SLEEP 60s")
+        );
         assert_eq!(
             armed_label(true, Sleep::Fading { since: t0 }, t0).as_deref(),
             Some("STOP AFTER SLEEP")

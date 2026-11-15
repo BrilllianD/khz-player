@@ -176,8 +176,8 @@ SQLite `~/.local/share/khz-player/library.db`, WAL, `user_version` migrations:
 CREATE TABLE tracks (path TEXT PRIMARY KEY, mtime INTEGER NOT NULL, size INTEGER NOT NULL,
   title TEXT, artist TEXT, album TEXT, album_artist TEXT, track_no INTEGER, disc_no INTEGER,
   year INTEGER, genre TEXT, duration_ms INTEGER, bitrate INTEGER, sample_rate INTEGER,
-  channels INTEGER, rg_track_gain REAL, rg_track_peak REAL, rg_album_gain REAL,
-  rg_album_peak REAL, seen INTEGER NOT NULL DEFAULT 1);
+  channels INTEGER, seen INTEGER NOT NULL DEFAULT 1, rg_track_gain REAL, rg_track_peak REAL,
+  rg_album_gain REAL, rg_album_peak REAL);
 CREATE TABLE playlists (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, position INTEGER NOT NULL);
 CREATE TABLE playlist_items (playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
   position INTEGER NOT NULL, path TEXT NOT NULL, PRIMARY KEY (playlist_id, position));

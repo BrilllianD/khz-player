@@ -197,7 +197,6 @@ impl App {
             length: info.duration.or(track.duration()),
             path: info.path.clone(),
         });
-        self.cover = None;
         self.spawn_cover_lookup(self.track_counter, info.path.clone());
         self.auto_eq_for(&info.path);
         self.now_track = Some(track);
