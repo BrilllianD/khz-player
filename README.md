@@ -111,9 +111,9 @@ color); clicking anywhere else or hiding it returns the arrows to volume.
 - Hover over the seek bar to see the time under the pointer.
 - Scroll over the volume bar to change volume; double-click the balance bar to center it.
 - Drag the title strip to move the window.
-- Drop files or folders onto the window to add them. Wayland drag and drop
-  may not work under every compositor; the file dialog (`L`, eject button),
-  ADD > "Type a path…" and the library always do.
+- Dropping files or folders onto the window adds them under X11 only; under
+  Wayland it does nothing (winit has no Wayland drag and drop), so use the
+  file dialog (`L`, eject button), ADD > "Type a path…" or the library.
 
 The playlist footer shows the count and length of the selected tracks next to
 the totals. Its menus hold the rest: ADD, REM (remove missing files,

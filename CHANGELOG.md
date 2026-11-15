@@ -28,7 +28,8 @@ when adding big folders.
 - "Add files…" and "Add folder…" in the ADD menu (and the eject button) open
   the desktop's file picker, and so does `L`. The path field under the
   transport buttons is gone; ADD > "Type a path…" still takes a typed path,
-  and drag and drop still works.
+  and dropping files onto the window works under X11 only (not under
+  Wayland).
 - Adding a folder or an M3U list no longer freezes the window: tracks appear
   in batches while the folder is read, and the playlist footer says
   "adding…" until it is done. Tags of files outside the library are now
