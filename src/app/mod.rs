@@ -288,7 +288,7 @@ impl App {
             });
             app.start_next_add();
         }
-        if app.library.is_empty() {
+        if needs_rescan(&app.library) {
             app.rescan();
         }
         app
@@ -472,6 +472,12 @@ impl eframe::App for App {
     }
 }
 
+/// Scan on start when the library is empty, or when a schema migration marked rows stale
+/// (`mtime = -1`, db v6); the stamp check then re-reads exactly those files.
+pub(crate) fn needs_rescan(library: &[Track]) -> bool {
+    library.is_empty() || library.iter().any(|t| t.mtime == -1)
+}
+
 fn expand_tilde(p: &Path) -> PathBuf {
     if let Ok(rest) = p.strip_prefix("~")
         && let Some(b) = directories::BaseDirs::new()
@@ -484,6 +490,15 @@ fn expand_tilde(p: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn needs_rescan_on_empty_or_stale() {
+        let t = |m| Track { mtime: m, ..Default::default() };
+        assert!(needs_rescan(&[]));
+        assert!(!needs_rescan(&[t(5), t(6)]));
+        assert!(needs_rescan(&[t(5), t(6), t(-1)]));
+        assert!(!needs_rescan(&[t(0)]));
+    }
 
     #[test]
     fn window_size_uses_saved_widths() {

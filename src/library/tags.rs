@@ -7,7 +7,7 @@ use lofty::prelude::*;
 use lofty::probe::Probe;
 use lofty::tag::{Tag, TagType};
 
-use super::Track;
+use super::{ReplayGain, Track};
 
 /// Extensions the scanner picks up. Every one must decode with the symphonia
 /// features enabled in `Cargo.toml`; Opus, WavPack, APE and Musepack do not.
@@ -83,6 +83,28 @@ fn cp1251_char(b: u8) -> char {
     }
 }
 
+/// Parses a ReplayGain value such as `-6.54 dB`, `+3.20 dB` or `0.988553`.
+fn parse_rg(s: &str) -> Option<f32> {
+    let s = s.trim();
+    let n = s.len();
+    let s = if n >= 2 && s.is_char_boundary(n - 2) && s[n - 2..].eq_ignore_ascii_case("db") {
+        &s[..n - 2]
+    } else {
+        s
+    };
+    s.trim().replace(',', ".").parse::<f32>().ok().filter(|v| v.is_finite())
+}
+
+fn replay_gain(tag: &Tag) -> ReplayGain {
+    let get = |k: ItemKey| tag.get_string(k).and_then(parse_rg);
+    ReplayGain {
+        track_gain_db: get(ItemKey::ReplayGainTrackGain),
+        track_peak: get(ItemKey::ReplayGainTrackPeak).filter(|p| *p >= 0.0),
+        album_gain_db: get(ItemKey::ReplayGainAlbumGain),
+        album_peak: get(ItemKey::ReplayGainAlbumPeak).filter(|p| *p >= 0.0),
+    }
+}
+
 fn apply_tag(t: &mut Track, tag: &Tag) {
     let legacy = matches!(tag.tag_type(), TagType::Id3v1 | TagType::Id3v2);
     t.title = clean(tag.title(), legacy);
@@ -93,6 +115,7 @@ fn apply_tag(t: &mut Track, tag: &Tag) {
     t.disc_no = tag.disk();
     t.year = tag.date().map(|d| d.year as u32).filter(|&y| y > 0);
     t.album_artist = clean(tag.get_string(ItemKey::AlbumArtist).map(std::borrow::Cow::Borrowed), legacy);
+    t.replay_gain = replay_gain(tag);
 }
 
 /// Reads metadata; on failure returns a track with only path and file stamp,
@@ -128,13 +151,25 @@ pub fn read(path: &Path) -> Track {
     if let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag()) {
         apply_tag(&mut t, tag);
     }
+    // mp3gain writes APEv2 next to ID3v2: take the gain from any tag that carries it.
+    if t.replay_gain == ReplayGain::default()
+        && let Some(rg) = tagged
+            .tags()
+            .iter()
+            .map(replay_gain)
+            .find(|rg| *rg != ReplayGain::default())
+    {
+        t.replay_gain = rg;
+    }
     t
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AUDIO_EXTENSIONS, apply_tag, decode_cp1251, fix_cp1251, is_audio, is_lost};
-    use crate::library::Track;
+    use super::{
+        AUDIO_EXTENSIONS, apply_tag, decode_cp1251, fix_cp1251, is_audio, is_lost, parse_rg,
+    };
+    use crate::library::{ReplayGain, Track};
     use lofty::prelude::*;
     use lofty::tag::{Tag, TagType};
     use std::path::Path;
@@ -146,6 +181,52 @@ mod tests {
         let mut t = Track::default();
         apply_tag(&mut t, &tag);
         t.album_artist
+    }
+
+    #[test]
+    fn parse_rg_handles_db_suffix_sign_comma_and_junk() {
+        assert_eq!(parse_rg("-6.54 dB"), Some(-6.54));
+        assert_eq!(parse_rg("+3.20 dB"), Some(3.2));
+        assert_eq!(parse_rg(" 0.988553 "), Some(0.988553));
+        assert_eq!(parse_rg("-6,54 dB"), Some(-6.54));
+        assert_eq!(parse_rg("abc"), None);
+        assert_eq!(parse_rg(""), None);
+        assert_eq!(parse_rg("inf"), None);
+    }
+
+    #[test]
+    fn replay_gain_keys_are_read() {
+        for tt in [TagType::VorbisComments, TagType::Id3v2] {
+            let mut tag = Tag::new(tt);
+            tag.insert_text(ItemKey::ReplayGainTrackGain, "-6.54 dB".into());
+            tag.insert_text(ItemKey::ReplayGainTrackPeak, "0.988553".into());
+            tag.insert_text(ItemKey::ReplayGainAlbumGain, "-7.10 dB".into());
+            tag.insert_text(ItemKey::ReplayGainAlbumPeak, "1.0".into());
+            let mut t = Track::default();
+            apply_tag(&mut t, &tag);
+            assert_eq!(
+                t.replay_gain,
+                ReplayGain {
+                    track_gain_db: Some(-6.54),
+                    track_peak: Some(0.988553),
+                    album_gain_db: Some(-7.10),
+                    album_peak: Some(1.0),
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn bad_replay_gain_is_none() {
+        let mut tag = Tag::new(TagType::VorbisComments);
+        tag.insert_text(ItemKey::ReplayGainTrackGain, "loud".into());
+        tag.insert_text(ItemKey::ReplayGainTrackPeak, "-0.5".into());
+        let mut t = Track::default();
+        apply_tag(&mut t, &tag);
+        assert_eq!(t.replay_gain, ReplayGain::default());
+        let mut t = Track::default();
+        apply_tag(&mut t, &Tag::new(TagType::VorbisComments));
+        assert_eq!(t.replay_gain, ReplayGain::default());
     }
 
     #[test]

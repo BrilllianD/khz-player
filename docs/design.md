@@ -170,14 +170,15 @@ SQLite `~/.local/share/khz-player/library.db`, WAL, `user_version` migrations:
 CREATE TABLE tracks (path TEXT PRIMARY KEY, mtime INTEGER NOT NULL, size INTEGER NOT NULL,
   title TEXT, artist TEXT, album TEXT, album_artist TEXT, track_no INTEGER, disc_no INTEGER,
   year INTEGER, genre TEXT, duration_ms INTEGER, bitrate INTEGER, sample_rate INTEGER,
-  channels INTEGER, seen INTEGER NOT NULL DEFAULT 1);
-CREATE INDEX idx_tracks_artist_album ON tracks(artist, album, disc_no, track_no);
+  channels INTEGER, rg_track_gain REAL, rg_track_peak REAL, rg_album_gain REAL,
+  rg_album_peak REAL, seen INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE playlists (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, position INTEGER NOT NULL);
 CREATE TABLE playlist_items (playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
   position INTEGER NOT NULL, path TEXT NOT NULL, PRIMARY KEY (playlist_id, position));
 CREATE TABLE eq_auto (path TEXT PRIMARY KEY, preset TEXT NOT NULL);
 ```
 Scanner: clear `seen`, set per visit, delete `seen=0`. Playlist item metadata resolved from `tracks` by path, else lofty on demand.
+Schema v6 adds ReplayGain columns (filled from the `REPLAYGAIN_*` tags, NULL when absent or unparsable) and sets `mtime = -1`. -1 matches no file stamp, so `App::new` (`needs_rescan`) runs one background rescan that re-reads every row. A build older than the DB schema refuses to open it.
 
 `~/.config/khz-player/config.toml`: version, library_roots, font_path, volume, balance, shuffle, repeat (off|all|one), last_playlist, last_track_index, show_eq/show_playlist/show_library, time_remaining, animation_fps (10-60, default 30), `[eq] enabled, auto, preamp, bands[10], preset`, `[window] x y w h`. Save debounced 1 s + on exit.
 

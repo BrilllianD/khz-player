@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 
-use super::Track;
+use super::{ReplayGain, Track};
 use crate::playlist::Playlist;
 
 const SCHEMA_V1: &str = "
@@ -40,7 +40,8 @@ CREATE TABLE eq_auto (
 ";
 
 const TRACK_COLS: &str = "path, mtime, size, title, artist, album, album_artist, track_no, \
-     disc_no, year, genre, duration_ms, bitrate, sample_rate, channels";
+     disc_no, year, genre, duration_ms, bitrate, sample_rate, channels, \
+     rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak";
 
 pub fn default_path() -> PathBuf {
     crate::config::data_dir().join("library.db")
@@ -70,7 +71,7 @@ fn setup(conn: &Connection) -> rusqlite::Result<()> {
     migrate(conn)
 }
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
@@ -103,6 +104,20 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
              UPDATE eq_auto SET path = CAST(path AS BLOB) WHERE typeof(path) = 'text'; \
              DROP INDEX IF EXISTS idx_tracks_artist_album; \
              PRAGMA user_version = 5; COMMIT;",
+        )?;
+    }
+    if version < 6 {
+        // ReplayGain columns. Unlike v4 the rows stay: mtime = -1 never matches a file
+        // stamp, so the next scan re-reads every file, and App::new starts that scan
+        // (`needs_rescan`).
+        conn.execute_batch(
+            "BEGIN; \
+             ALTER TABLE tracks ADD COLUMN rg_track_gain REAL; \
+             ALTER TABLE tracks ADD COLUMN rg_track_peak REAL; \
+             ALTER TABLE tracks ADD COLUMN rg_album_gain REAL; \
+             ALTER TABLE tracks ADD COLUMN rg_album_peak REAL; \
+             UPDATE tracks SET mtime = -1; \
+             PRAGMA user_version = 6; COMMIT;",
         )?;
     }
     Ok(())
@@ -142,6 +157,12 @@ fn row_to_track(r: &Row<'_>) -> rusqlite::Result<Track> {
         bitrate: r.get(12)?,
         sample_rate: r.get(13)?,
         channels: r.get(14)?,
+        replay_gain: ReplayGain {
+            track_gain_db: r.get(15)?,
+            track_peak: r.get(16)?,
+            album_gain_db: r.get(17)?,
+            album_peak: r.get(18)?,
+        },
     })
 }
 
@@ -174,13 +195,15 @@ pub fn stamps(conn: &Connection) -> rusqlite::Result<HashMap<PathBuf, (i64, i64)
 pub fn upsert_track(tx: &Transaction<'_>, t: &Track) -> rusqlite::Result<()> {
     tx.prepare_cached(&format!(
         "INSERT INTO tracks ({TRACK_COLS}, seen) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 1) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, 1) \
          ON CONFLICT(path) DO UPDATE SET mtime=excluded.mtime, size=excluded.size, \
          title=excluded.title, artist=excluded.artist, album=excluded.album, \
          album_artist=excluded.album_artist, track_no=excluded.track_no, \
          disc_no=excluded.disc_no, year=excluded.year, genre=excluded.genre, \
          duration_ms=excluded.duration_ms, bitrate=excluded.bitrate, \
-         sample_rate=excluded.sample_rate, channels=excluded.channels, seen=1"
+         sample_rate=excluded.sample_rate, channels=excluded.channels, \
+         rg_track_gain=excluded.rg_track_gain, rg_track_peak=excluded.rg_track_peak, \
+         rg_album_gain=excluded.rg_album_gain, rg_album_peak=excluded.rg_album_peak, seen=1"
     ))?
     .execute(params![
         path_bytes(&t.path),
@@ -198,6 +221,10 @@ pub fn upsert_track(tx: &Transaction<'_>, t: &Track) -> rusqlite::Result<()> {
         t.bitrate,
         t.sample_rate,
         t.channels,
+        t.replay_gain.track_gain_db,
+        t.replay_gain.track_peak,
+        t.replay_gain.album_gain_db,
+        t.replay_gain.album_peak,
     ])?;
     Ok(())
 }
@@ -283,14 +310,15 @@ pub fn load_playlists(conn: &Connection) -> rusqlite::Result<Vec<Playlist>> {
     let mut items = conn.prepare(
         "SELECT i.path, t.mtime, t.size, t.title, t.artist, t.album, t.album_artist, \
          t.track_no, t.disc_no, t.year, t.genre, t.duration_ms, t.bitrate, t.sample_rate, \
-         t.channels, t.path IS NOT NULL \
+         t.channels, t.rg_track_gain, t.rg_track_peak, t.rg_album_gain, t.rg_album_peak, \
+         t.path IS NOT NULL \
          FROM playlist_items i LEFT JOIN tracks t ON t.path = i.path \
          WHERE i.playlist_id = ?1 ORDER BY i.position",
     )?;
     for (id, name) in heads {
         let tracks = items
             .query_map([id], |r| {
-                if r.get::<_, bool>(15)? {
+                if r.get::<_, bool>(19)? {
                     row_to_track(r)
                 } else {
                     Ok(Track::from_path(get_path(r, 0)?))
@@ -483,12 +511,78 @@ mod tests {
     #[test]
     fn refuses_newer_schema() {
         let conn = Connection::open_in_memory().unwrap();
-        conn.pragma_update(None, "user_version", 6).unwrap();
+        conn.pragma_update(None, "user_version", 7).unwrap();
         assert!(migrate(&conn).is_err());
         let v: i64 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
+        assert_eq!(v, 7);
+    }
+
+    #[test]
+    fn v5_migrates_to_v6_keeping_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_V1).unwrap();
+        conn.execute_batch(
+            "INSERT INTO tracks (path, mtime, size, title) VALUES (CAST('/m/a.mp3' AS BLOB), 1234, 2, 'Known'); \
+             INSERT INTO playlists (id, name, position) VALUES (1, 'Rock', 0); \
+             INSERT INTO playlist_items (playlist_id, position, path) VALUES (1, 0, CAST('/m/a.mp3' AS BLOB)); \
+             INSERT INTO eq_auto (path, preset) VALUES (CAST('/m/a.mp3' AS BLOB), 'Pop'); \
+             PRAGMA user_version = 5;",
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        let v: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
         assert_eq!(v, 6);
+        let t = get_track(&conn, Path::new("/m/a.mp3")).unwrap().unwrap();
+        assert_eq!(t.title.as_deref(), Some("Known"));
+        assert_eq!(t.mtime, -1);
+        assert_eq!(t.replay_gain, ReplayGain::default());
+        let lists = load_playlists(&conn).unwrap();
+        assert_eq!(lists[0].tracks[0].title.as_deref(), Some("Known"));
+        assert_eq!(
+            eq_auto_get(&conn, Path::new("/m/a.mp3")).unwrap().as_deref(),
+            Some("Pop")
+        );
+        assert_eq!(stamps(&conn).unwrap()[Path::new("/m/a.mp3")], (-1, 2));
+        assert!(crate::app::needs_rescan(&load_tracks(&conn).unwrap()));
+    }
+
+    #[test]
+    fn replay_gain_roundtrip() {
+        let mut conn = open_memory().unwrap();
+        let full = ReplayGain {
+            track_gain_db: Some(-6.54),
+            track_peak: Some(0.988553),
+            album_gain_db: Some(-7.1),
+            album_peak: Some(1.0),
+        };
+        let part = ReplayGain { track_gain_db: Some(-3.0), ..Default::default() };
+        let tx = conn.transaction().unwrap();
+        upsert_track(&tx, &Track { replay_gain: full, ..track("/m/a.mp3", "A") }).unwrap();
+        upsert_track(&tx, &Track { replay_gain: part, ..track("/m/b.mp3", "B") }).unwrap();
+        tx.commit().unwrap();
+
+        let rg = |conn: &Connection, p: &str| get_track(conn, Path::new(p)).unwrap().unwrap().replay_gain;
+        assert_eq!(rg(&conn, "/m/a.mp3"), full);
+        assert_eq!(rg(&conn, "/m/b.mp3"), part);
+        let all = load_tracks(&conn).unwrap();
+        assert_eq!(all[0].replay_gain, full);
+        assert_eq!(all[1].replay_gain, part);
+
+        let mut p = Playlist::new("Rock");
+        p.add([Track::from_path("/m/a.mp3".into()), Track::from_path("/m/b.mp3".into())]);
+        save_playlist(&mut conn, &mut p, 0).unwrap();
+        let lists = load_playlists(&conn).unwrap();
+        assert_eq!(lists[0].tracks[0].replay_gain, full);
+        assert_eq!(lists[0].tracks[1].replay_gain, part);
+
+        let tx = conn.transaction().unwrap();
+        upsert_track(&tx, &track("/m/a.mp3", "A")).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(rg(&conn, "/m/a.mp3"), ReplayGain::default());
     }
 
     #[test]

@@ -6,6 +6,15 @@ pub mod tags;
 use std::path::PathBuf;
 use std::time::Duration;
 
+/// ReplayGain values from the file tags; `None` when absent or unparsable.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ReplayGain {
+    pub track_gain_db: Option<f32>,
+    pub track_peak: Option<f32>,
+    pub album_gain_db: Option<f32>,
+    pub album_peak: Option<f32>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Track {
     pub path: PathBuf,
@@ -23,6 +32,7 @@ pub struct Track {
     pub bitrate: Option<u32>,
     pub sample_rate: Option<u32>,
     pub channels: Option<u8>,
+    pub replay_gain: ReplayGain,
 }
 
 impl Track {
