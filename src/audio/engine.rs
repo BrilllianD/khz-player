@@ -12,6 +12,7 @@ use crate::audio::decoder::{Decoder, TrackInfo};
 use crate::audio::resample::Resampler;
 use crate::audio::shared::Shared;
 use crate::audio::{Command, Event, PlayerState};
+use crate::library::ReplayGain;
 
 const IDLE_WAIT: Duration = Duration::from_millis(5);
 /// The ack comes after up to one device period plus the 20 ms flush fade-out.
@@ -60,6 +61,15 @@ type Prefetched = (u64, PathBuf, anyhow::Result<Decoder>);
 struct Current {
     decoder: Decoder,
     resampler: Resampler,
+    /// Tags of this track; `Shared` turns them into a factor on every `fill`.
+    gain: ReplayGain,
+}
+
+/// Multiplies every sample by `g`.
+fn scale(buf: &mut [f32], g: f32) {
+    for s in buf {
+        *s *= g;
+    }
 }
 
 /// Replaces the resampler with one for the decoder's current rate and
@@ -80,7 +90,9 @@ struct Engine {
     cur: Option<Current>,
     /// Path of the audible track, so Play after Stop restarts it.
     last_path: Option<PathBuf>,
-    next: Option<(PathBuf, Decoder)>,
+    /// ReplayGain tags of `last_path`.
+    last_gain: ReplayGain,
+    next: Option<(PathBuf, Decoder, ReplayGain)>,
     /// Background opens report here; results whose generation is not
     /// `prefetch_gen` were superseded and are dropped.
     prefetch_tx: Sender<Prefetched>,
@@ -88,14 +100,16 @@ struct Engine {
     prefetch_gen: u64,
     /// Open in flight for the current generation.
     pending: Option<PathBuf>,
+    /// Tags for the open in flight.
+    pending_gain: ReplayGain,
     /// Decoded, resampled frames not yet pushed to the ring.
     buf: Vec<f32>,
     buf_pos: usize,
     scratch: Vec<f32>,
     /// Frames pushed to the ring, in the callback's `consumed` domain.
     pushed_total: i64,
-    /// Gapless transitions waiting to become audible: (consumed mark, info).
-    transitions: VecDeque<(i64, TrackInfo)>,
+    /// Gapless transitions waiting to become audible: (consumed mark, info, gain).
+    transitions: VecDeque<(i64, TrackInfo, ReplayGain)>,
     /// Current decoder hit end of stream and nothing follows.
     eof: bool,
     /// Xrun count at the last log line, and when it was written.
@@ -123,11 +137,13 @@ pub fn run(
         state: PlayerState::Stopped,
         cur: None,
         last_path: None,
+        last_gain: ReplayGain::default(),
         next: None,
         prefetch_tx,
         prefetch_rx,
         prefetch_gen: 0,
         pending: None,
+        pending_gain: ReplayGain::default(),
         buf: Vec::with_capacity(16384),
         buf_pos: 0,
         scratch: Vec::with_capacity(16384),
@@ -230,17 +246,18 @@ impl Engine {
         self.transitions.clear();
     }
 
-    fn advanced(&mut self, info: TrackInfo) {
+    fn advanced(&mut self, info: TrackInfo, gain: ReplayGain) {
         self.last_path = Some(info.path.clone());
+        self.last_gain = gain;
         self.emit(Event::Advanced(info));
     }
 
     /// Returns false on shutdown.
     fn handle(&mut self, cmd: Command) -> bool {
         match cmd {
-            Command::Load { path, play } => self.load(path, play),
-            Command::Resume { path, at } => {
-                self.load(path, false);
+            Command::Load { path, play, gain } => self.load(path, play, gain),
+            Command::Resume { path, at, gain } => {
+                self.load(path, false, gain);
                 if self.cur.is_some() {
                     if !at.is_zero() {
                         self.seek(at);
@@ -254,7 +271,7 @@ impl Engine {
                     if self.cur.is_some() {
                         self.set_state(PlayerState::Playing);
                     } else if let Some(p) = self.last_path.clone() {
-                        self.load(p, true);
+                        self.load(p, true, self.last_gain);
                     }
                 }
                 PlayerState::Playing => {
@@ -279,7 +296,7 @@ impl Engine {
                     self.seek(pos);
                 }
             }
-            Command::PrefetchNext(path) => self.prefetch(path),
+            Command::PrefetchNext(next) => self.prefetch(next),
             Command::SetOutput { ring, rate } => self.set_output(ring, rate),
             Command::Shutdown => return false,
         }
@@ -291,21 +308,21 @@ impl Engine {
         Duration::from_secs_f64(self.shared.position_frames() as f64 / rate)
     }
 
-    fn open_current(&mut self, decoder: Decoder) -> anyhow::Result<()> {
+    fn open_current(&mut self, decoder: Decoder, gain: ReplayGain) -> anyhow::Result<()> {
         let resampler = Resampler::new(decoder.info.sample_rate, self.out_rate)?;
-        self.cur = Some(Current { decoder, resampler });
+        self.cur = Some(Current { decoder, resampler, gain });
         self.eof = false;
         Ok(())
     }
 
-    fn load(&mut self, path: PathBuf, play: bool) {
+    fn load(&mut self, path: PathBuf, play: bool, gain: ReplayGain) {
         self.flush();
         self.cur = None;
         self.cancel_prefetch();
         self.eof = false;
         let opened = Decoder::open(&path).and_then(|d| {
             let info = d.info.clone();
-            self.open_current(d)?;
+            self.open_current(d, gain)?;
             Ok(info)
         });
         match opened {
@@ -314,6 +331,7 @@ impl Engine {
                     .track_start
                     .store(self.consumed(), Ordering::Release);
                 self.last_path = Some(info.path.clone());
+                self.last_gain = gain;
                 self.emit(Event::Loaded(info));
                 self.set_state(if play {
                     PlayerState::Playing
@@ -324,6 +342,7 @@ impl Engine {
             Err(e) => {
                 tracing::warn!("cannot play {}: {e:#}", path.display());
                 self.last_path = Some(path.clone());
+                self.last_gain = gain;
                 self.set_state(PlayerState::Stopped);
                 self.emit(Event::LoadFailed {
                     path,
@@ -351,8 +370,8 @@ impl Engine {
         }
         // The current decoder may already be a gapless successor whose first
         // frames are about to be discarded: it becomes current right now.
-        while let Some((_, info)) = self.transitions.pop_front() {
-            self.advanced(info);
+        while let Some((_, info, gain)) = self.transitions.pop_front() {
+            self.advanced(info, gain);
         }
         self.flush();
         let cur = self.cur.as_mut().expect("current");
@@ -422,17 +441,21 @@ impl Engine {
     /// Opens `path` on a short-lived thread: a slow disk must not stall
     /// `fill`, and the ring holds only 0.3 s. The result arrives through
     /// `prefetch_rx` and lands in `prefetched`.
-    fn prefetch(&mut self, path: Option<PathBuf>) {
-        let Some(path) = path else {
+    fn prefetch(&mut self, next: Option<(PathBuf, ReplayGain)>) {
+        let Some((path, gain)) = next else {
             self.cancel_prefetch();
             return;
         };
-        if self.next.as_ref().is_some_and(|(p, _)| *p == path)
-            || self.pending.as_ref() == Some(&path)
-        {
+        if let Some(n) = self.next.as_mut().filter(|(p, _, _)| *p == path) {
+            n.2 = gain;
+            return;
+        }
+        if self.pending.as_ref() == Some(&path) {
+            self.pending_gain = gain;
             return;
         }
         self.cancel_prefetch();
+        self.pending_gain = gain;
         let generation = self.prefetch_gen;
         let tx = self.prefetch_tx.clone();
         let p = path.clone();
@@ -454,7 +477,7 @@ impl Engine {
         }
         self.pending = None;
         match result {
-            Ok(d) => self.next = Some((path, d)),
+            Ok(d) => self.next = Some((path, d, self.pending_gain)),
             Err(e) => tracing::debug!("prefetch {}: {e:#}", path.display()),
         }
     }
@@ -498,6 +521,8 @@ impl Engine {
             let Some(cur) = self.cur.as_mut() else {
                 return;
             };
+            let g = self.shared.rg_factor(&cur.gain);
+            let start = self.buf.len();
             self.scratch.clear();
             match cur.decoder.next_frames(&mut self.scratch) {
                 Ok(true) => {
@@ -511,6 +536,9 @@ impl Engine {
                         if let Err(e) = rebuilt {
                             tracing::warn!("resampler rebuild: {e:#}");
                             self.eof = true;
+                            if g != 1.0 {
+                                scale(&mut self.buf[start..], g);
+                            }
                             continue;
                         }
                     }
@@ -535,18 +563,21 @@ impl Engine {
                     self.eof = true;
                 }
             }
+            if g != 1.0 {
+                scale(&mut self.buf[start..], g);
+            }
         }
     }
 
     fn switch_to_next(&mut self) {
-        let Some((_, decoder)) = self.next.take() else {
+        let Some((_, decoder, gain)) = self.next.take() else {
             return;
         };
         let info = decoder.info.clone();
         // All frames of the previous track (pushed or still buffered) precede this mark.
         let mark = self.pushed_total + ((self.buf.len() - self.buf_pos) / 2) as i64;
-        match self.open_current(decoder) {
-            Ok(()) => self.transitions.push_back((mark, info)),
+        match self.open_current(decoder, gain) {
+            Ok(()) => self.transitions.push_back((mark, info, gain)),
             Err(e) => {
                 tracing::warn!("gapless switch failed: {e:#}");
                 self.eof = true;
@@ -584,13 +615,13 @@ impl Engine {
     fn check_progress(&mut self) {
         self.log_xruns();
         let consumed = self.consumed();
-        while let Some(&(mark, _)) = self.transitions.front() {
+        while let Some(&(mark, _, _)) = self.transitions.front() {
             if consumed < mark {
                 break;
             }
-            let (mark, info) = self.transitions.pop_front().expect("front");
+            let (mark, info, gain) = self.transitions.pop_front().expect("front");
             self.shared.track_start.store(mark, Ordering::Release);
-            self.advanced(info);
+            self.advanced(info, gain);
         }
         if self.state == PlayerState::Playing
             && self.eof
@@ -665,7 +696,7 @@ mod tests {
         };
         let pos = || Duration::from_secs_f64(shared.position_frames() as f64 / 48000.0);
 
-        tx.send(Command::Resume { path, at: Duration::from_millis(2500) }).unwrap();
+        tx.send(Command::Resume { path, at: Duration::from_millis(2500), gain: ReplayGain::default() }).unwrap();
         wait_for(&ev_rx, |e| matches!(e, Event::StateChanged(PlayerState::Paused)), 5);
         std::thread::sleep(Duration::from_millis(100));
         assert!((pos().as_secs_f64() - 2.5).abs() < 0.05, "{:?}", pos());
@@ -702,7 +733,7 @@ mod tests {
 
         // Stopped: the engine is blocked on the channel and must still react.
         std::thread::sleep(Duration::from_millis(50));
-        tx.send(Command::Load { path, play: true }).unwrap();
+        tx.send(Command::Load { path, play: true, gain: ReplayGain::default() }).unwrap();
         wait_for(&ev_rx, |e| matches!(e, Event::StateChanged(PlayerState::Playing)), 5);
         tx.send(Command::Stop).unwrap();
         wait_for(&ev_rx, |e| matches!(e, Event::StateChanged(PlayerState::Stopped)), 5);
@@ -731,11 +762,13 @@ mod tests {
             state: PlayerState::Stopped,
             cur: None,
             last_path: None,
+            last_gain: ReplayGain::default(),
             next: None,
             prefetch_tx,
             prefetch_rx,
             prefetch_gen: 0,
             pending: None,
+            pending_gain: ReplayGain::default(),
             buf: Vec::new(),
             buf_pos: 0,
             scratch: Vec::new(),
@@ -758,7 +791,11 @@ mod tests {
 
     /// `prefetch` and wait until its result is applied, as the run loop would.
     fn prefetch_now(e: &mut Engine, path: PathBuf) {
-        e.prefetch(Some(path));
+        prefetch_now_gain(e, path, ReplayGain::default());
+    }
+
+    fn prefetch_now_gain(e: &mut Engine, path: PathBuf, gain: ReplayGain) {
+        e.prefetch(Some((path, gain)));
         let r = recv_prefetch(e);
         e.prefetched(r);
         assert!(e.pending.is_none() && e.next.is_some());
@@ -772,10 +809,10 @@ mod tests {
             crate::library::scanner::tests::write_wav(p, 800);
         }
         let (mut e, _events, _ring) = test_engine();
-        e.prefetch(Some(a.clone()));
-        e.prefetch(Some(b.clone()));
+        e.prefetch(Some((a.clone(), ReplayGain::default())));
+        e.prefetch(Some((b.clone(), ReplayGain::default())));
         // Same path again while in flight: no new open.
-        e.prefetch(Some(b.clone()));
+        e.prefetch(Some((b.clone(), ReplayGain::default())));
         assert_eq!(e.pending.as_ref(), Some(&b));
         // Deliver A's stale result last, the worst order.
         let mut results = [recv_prefetch(&e), recv_prefetch(&e)];
@@ -785,10 +822,10 @@ mod tests {
         }
         assert!(e.prefetch_rx.try_recv().is_err());
         assert!(e.pending.is_none());
-        assert_eq!(e.next.as_ref().map(|(p, _)| p), Some(&b));
+        assert_eq!(e.next.as_ref().map(|(p, _, _)| p), Some(&b));
 
         // A stop makes an open in flight stale too.
-        e.prefetch(Some(a));
+        e.prefetch(Some((a, ReplayGain::default())));
         e.stop();
         let r = recv_prefetch(&e);
         e.prefetched(r);
@@ -804,7 +841,7 @@ mod tests {
             crate::library::scanner::tests::write_wav(p, 800);
         }
         let (mut e, events, mut ring) = test_engine();
-        e.load(a, true);
+        e.load(a, true, ReplayGain::default());
         prefetch_now(&mut e, b.clone());
         // A is shorter than the ring: decoding runs into B without any of A
         // being played, so the switch to B is pending.
@@ -812,7 +849,7 @@ mod tests {
         assert_eq!(e.transitions.len(), 1);
         assert_eq!(e.last_path.as_deref(), Some(dir.join("a.wav").as_path()));
 
-        e.load(c.clone(), true);
+        e.load(c.clone(), true, ReplayGain::default());
         let evs: Vec<Event> = events.try_iter().collect();
         assert!(!evs.iter().any(|ev| matches!(ev, Event::Advanced(_))), "{evs:?}");
         assert!(matches!(evs.last(), Some(Event::Loaded(i)) if i.path == c), "{evs:?}");
@@ -868,7 +905,7 @@ mod tests {
         let path = dir.join("t.wav");
         crate::library::scanner::tests::write_wav(&path, 8000 * 2);
         let (mut e, _events, _ring_rx) = test_engine();
-        e.load(path, true);
+        e.load(path, true, ReplayGain::default());
         e.fill();
         let t0 = Instant::now();
         let lost = |e: &Engine| e.shared.device_lost.load(Ordering::Acquire);
@@ -898,7 +935,7 @@ mod tests {
         let path = dir.join("t.wav");
         crate::library::scanner::tests::write_wav(&path, 8000 * 2);
         let (mut e, events, mut old_rx) = test_engine();
-        e.load(path, true);
+        e.load(path, true, ReplayGain::default());
         e.fill();
         // The callback played 100 ms of it.
         let heard = 4800;
@@ -938,7 +975,7 @@ mod tests {
             crate::library::scanner::tests::write_wav(p, 800);
         }
         let (mut e, events, _old_rx) = test_engine();
-        e.load(a, true);
+        e.load(a, true, ReplayGain::default());
         prefetch_now(&mut e, b.clone());
         e.fill();
         assert_eq!(e.transitions.len(), 1);
@@ -969,7 +1006,7 @@ mod tests {
     fn load_failure_emits_load_failed() {
         let (mut e, events, _ring) = test_engine();
         let path = PathBuf::from("/nonexistent/khz-test.mp3");
-        e.load(path.clone(), true);
+        e.load(path.clone(), true, ReplayGain::default());
         let evs: Vec<Event> = events.try_iter().collect();
         assert!(
             evs.iter().any(|ev| matches!(ev, Event::LoadFailed { path: p, play: true, .. } if *p == path)),
@@ -992,6 +1029,83 @@ mod tests {
         n / 2
     }
 
+    fn gain_db(db: f32) -> ReplayGain {
+        ReplayGain { track_gain_db: Some(db), ..Default::default() }
+    }
+
+    #[test]
+    fn scale_multiplies_every_sample() {
+        let mut v = [1.0, -2.0, 0.5, 0.0];
+        scale(&mut v, 0.5);
+        assert_eq!(v, [0.5, -1.0, 0.25, 0.0]);
+    }
+
+    #[test]
+    fn load_stores_gain_in_current_and_last() {
+        let dir = crate::config::test_dir("engine-gain-load");
+        let a = dir.join("a.wav");
+        crate::library::scanner::tests::write_wav(&a, 800);
+        let (mut e, _events, _ring) = test_engine();
+        e.load(a, true, gain_db(-3.0));
+        assert_eq!(e.cur.as_ref().map(|c| c.gain), Some(gain_db(-3.0)));
+        assert_eq!(e.last_gain, gain_db(-3.0));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn gapless_successor_carries_its_gain() {
+        let dir = crate::config::test_dir("engine-gain-gapless");
+        let [a, b] = ["a.wav", "b.wav"].map(|n| dir.join(n));
+        crate::library::scanner::tests::write_wav_rate(&a, 8000, 8000);
+        crate::library::scanner::tests::write_wav_rate(&b, 8000, 8000);
+        let (mut e, events, mut ring) = test_engine();
+        e.load(a, true, gain_db(-3.0));
+        consume(&e, &mut ring, 0);
+        prefetch_now_gain(&mut e, b.clone(), gain_db(-9.0));
+        events.try_iter().for_each(drop);
+        let mut switched = false;
+        for _ in 0..1000 {
+            e.fill();
+            if !switched && !e.transitions.is_empty() {
+                switched = true;
+                assert_eq!(e.cur.as_ref().map(|c| c.gain), Some(gain_db(-9.0)));
+                // Not audible yet: A's gain is still the reported one.
+                assert_eq!(e.last_gain, gain_db(-3.0));
+            }
+            e.check_progress();
+            if e.transitions.is_empty() && switched {
+                break;
+            }
+            consume(&e, &mut ring, 777);
+        }
+        assert!(switched);
+        assert_eq!(e.last_gain, gain_db(-9.0));
+        assert_eq!(e.last_path.as_ref(), Some(&b));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn repeated_prefetch_updates_gain_without_reopening() {
+        let dir = crate::config::test_dir("engine-gain-reprefetch");
+        let b = dir.join("b.wav");
+        crate::library::scanner::tests::write_wav(&b, 800);
+        let (mut e, _events, _ring) = test_engine();
+        // In flight.
+        e.prefetch(Some((b.clone(), gain_db(-1.0))));
+        e.prefetch(Some((b.clone(), gain_db(-2.0))));
+        assert_eq!(e.pending.as_ref(), Some(&b));
+        let r = recv_prefetch(&e);
+        e.prefetched(r);
+        assert!(e.prefetch_rx.try_recv().is_err());
+        assert_eq!(e.next.as_ref().map(|n| n.2), Some(gain_db(-2.0)));
+        // Arrived.
+        e.prefetch(Some((b.clone(), gain_db(-4.0))));
+        assert!(e.pending.is_none());
+        assert_eq!(e.next.as_ref().map(|n| n.2), Some(gain_db(-4.0)));
+        assert!(e.prefetch_rx.try_recv().is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn gapless_across_rates_pushes_every_frame_and_advances_on_the_mark() {
         let dir = crate::config::test_dir("engine-gapless-rates");
@@ -1001,7 +1115,7 @@ mod tests {
         crate::library::scanner::tests::write_wav_rate(&b, 8000, 16000);
         let (mut e, events, mut ring) = test_engine();
         assert_eq!(e.out_rate, 48000);
-        e.load(a, true);
+        e.load(a, true, ReplayGain::default());
         // No callback ran during the load: ack its flush now, on an empty ring.
         consume(&e, &mut ring, 0);
         prefetch_now(&mut e, b.clone());
@@ -1014,7 +1128,7 @@ mod tests {
         for _ in 0..1000 {
             e.fill();
             if mark.is_none() {
-                mark = e.transitions.front().map(|&(m, _)| m);
+                mark = e.transitions.front().map(|&(m, _, _)| m);
             }
             let consumed = e.consumed();
             e.check_progress();
@@ -1069,7 +1183,7 @@ mod tests {
         let path = dir.join("t.wav");
         crate::library::scanner::tests::write_wav(&path, 8000);
         let (mut e, events, mut ring) = test_engine();
-        e.load(path, true);
+        e.load(path, true, ReplayGain::default());
         // No callback ran during the load: ack its flush now, on an empty ring.
         consume(&e, &mut ring, 0);
         events.try_iter().for_each(drop);
@@ -1120,7 +1234,7 @@ mod tests {
         let path = dir.join("t.wav");
         crate::library::scanner::tests::write_wav(&path, 8000 * 4);
         let (mut e, events, _ring) = test_engine();
-        e.load(path, true);
+        e.load(path, true, ReplayGain::default());
         events.try_iter().for_each(drop);
 
         e.handle(Command::SeekRel(60_000));
@@ -1176,7 +1290,7 @@ mod tests {
 
         // The engine resamples each run to the output rate without losing frames.
         let (mut e, _events, mut ring) = test_engine();
-        e.load(path, true);
+        e.load(path, true, ReplayGain::default());
         loop {
             e.fill();
             while ring.pop().is_ok() {}
@@ -1217,7 +1331,7 @@ mod tests {
         };
         let pos = || Duration::from_secs_f64(shared.position_frames() as f64 / 48000.0);
 
-        tx.send(Command::Load { path: path.clone(), play: true }).unwrap();
+        tx.send(Command::Load { path: path.clone(), play: true, gain: ReplayGain::default() }).unwrap();
         let Event::Loaded(info) = wait_for(&ev_rx, |e| matches!(e, Event::Loaded(_)), 5) else {
             unreachable!()
         };
@@ -1245,7 +1359,7 @@ mod tests {
         tx.send(Command::Play).unwrap();
 
         // Gapless: prefetch the same file and run into the end.
-        tx.send(Command::PrefetchNext(Some(path.clone()))).unwrap();
+        tx.send(Command::PrefetchNext(Some((path.clone(), ReplayGain::default())))).unwrap();
         tx.send(Command::Seek(dur.saturating_sub(Duration::from_secs(2)))).unwrap();
         wait_for(&ev_rx, |e| matches!(e, Event::Advanced(_)), 10);
         assert!(pos() < Duration::from_secs(2), "position not reset: {:?}", pos());

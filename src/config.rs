@@ -28,6 +28,27 @@ impl Default for EqConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReplayGainMode {
+    #[default]
+    Off,
+    Track,
+    Album,
+    /// Album gain, track gain while shuffling.
+    Auto,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ReplayGainConfig {
+    pub mode: ReplayGainMode,
+    /// Added to the chosen gain.
+    pub preamp_db: f32,
+    /// Gain for tracks without a usable ReplayGain tag.
+    pub untagged_db: f32,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WindowConfig {
@@ -67,6 +88,8 @@ pub struct Config {
     /// Sleep timer length in minutes (Ctrl+S).
     pub sleep_minutes: u32,
     pub eq: EqConfig,
+    /// Loudness normalisation from the file tags (Settings, Audio).
+    pub replaygain: ReplayGainConfig,
     pub window: WindowConfig,
 }
 
@@ -95,6 +118,7 @@ impl Default for Config {
             gapless: true,
             sleep_minutes: 30,
             eq: EqConfig::default(),
+            replaygain: ReplayGainConfig::default(),
             window: WindowConfig::default(),
         }
     }
@@ -185,6 +209,8 @@ impl Config {
         for b in &mut self.eq.bands {
             *b = in_range(*b, -max, max, 0.0);
         }
+        self.replaygain.preamp_db = in_range(self.replaygain.preamp_db, -15.0, 15.0, 0.0);
+        self.replaygain.untagged_db = in_range(self.replaygain.untagged_db, -15.0, 15.0, 0.0);
         for v in [&mut self.window.w, &mut self.window.h, &mut self.window.library_w] {
             *v = v.filter(|x| x.is_finite() && *x > 0.0);
         }
@@ -258,6 +284,7 @@ mod tests {
         assert!(c.show_playlist);
         assert!(c.gapless);
         assert_eq!(c.sleep_minutes, 30);
+        assert_eq!(c.replaygain, ReplayGainConfig::default());
     }
 
     #[test]
@@ -281,7 +308,7 @@ mod tests {
         let path = dir.join("config.toml");
         std::fs::write(
             &path,
-            "volume = 3.0\nbalance = -7.0\nanimation_fps = 500\nsleep_minutes = 9999\n[eq]\npreamp = 40.0\nbands = [-50,0,0,0,0,0,0,0,0,nan]\n",
+            "volume = 3.0\nbalance = -7.0\nanimation_fps = 500\nsleep_minutes = 9999\n[eq]\npreamp = 40.0\nbands = [-50,0,0,0,0,0,0,0,0,nan]\n[replaygain]\nmode = \"album\"\npreamp_db = 40.0\nuntagged_db = -99.0\n",
         )
         .unwrap();
         let (c, err) = Config::load_from(&path);
@@ -293,6 +320,9 @@ mod tests {
         assert_eq!(c.eq.preamp, 12.0);
         assert_eq!(c.eq.bands[0], -12.0);
         assert_eq!(c.eq.bands[9], 0.0);
+        assert_eq!(c.replaygain.mode, ReplayGainMode::Album);
+        assert_eq!(c.replaygain.preamp_db, 15.0);
+        assert_eq!(c.replaygain.untagged_db, -15.0);
     }
 
     #[test]

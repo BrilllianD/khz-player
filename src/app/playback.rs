@@ -1,4 +1,6 @@
 use super::*;
+use crate::audio::shared::{RG_ALBUM, RG_OFF, RG_TRACK};
+use crate::config::ReplayGainMode;
 
 pub const SLEEP_FADE: Duration = Duration::from_secs(10);
 const SLEEP_RESTORE_DELAY: Duration = Duration::from_millis(200);
@@ -92,8 +94,9 @@ impl App {
         }
         pl.set_current(index);
         let path = pl.tracks[index].path.clone();
+        let gain = pl.tracks[index].replay_gain;
         self.playing_list = list;
-        self.audio.send(Command::Load { path, play: true });
+        self.audio.send(Command::Load { path, play: true, gain });
     }
 
     pub(super) fn playing(&mut self) -> &mut Playlist {
@@ -150,7 +153,7 @@ impl App {
         let next = pl
             .peek_next(repeat, shuffle, true)
             .and_then(|i| pl.tracks.get(i))
-            .map(|t| t.path.clone());
+            .map(|t| (t.path.clone(), t.replay_gain));
         self.audio.send(Command::PrefetchNext(next));
     }
 
@@ -230,7 +233,18 @@ impl App {
         self.cfg.shuffle = on;
         self.mpris.send(MprisUpdate::Shuffle(on));
         self.mark_cfg();
+        self.publish_replay_gain();
         self.refresh_prefetch();
+    }
+
+    /// Hands the ReplayGain settings to the engine; Auto depends on shuffle.
+    pub fn publish_replay_gain(&self) {
+        let rg = &self.cfg.replaygain;
+        let sh = &self.audio.shared;
+        sh.rg_mode
+            .store(rg_mode_code(rg.mode, self.cfg.shuffle), std::sync::atomic::Ordering::Relaxed);
+        sh.rg_preamp_db.store(rg.preamp_db);
+        sh.rg_untagged_db.store(rg.untagged_db);
     }
 
     pub fn set_repeat(&mut self, r: crate::playlist::Repeat) {
@@ -248,9 +262,30 @@ impl App {
     }
 }
 
+/// Engine mode code for the configured mode; Auto plays albums in order
+/// and single tracks when shuffled.
+fn rg_mode_code(mode: ReplayGainMode, shuffle: bool) -> u8 {
+    match mode {
+        ReplayGainMode::Off => RG_OFF,
+        ReplayGainMode::Track => RG_TRACK,
+        ReplayGainMode::Album => RG_ALBUM,
+        ReplayGainMode::Auto if shuffle => RG_TRACK,
+        ReplayGainMode::Auto => RG_ALBUM,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rg_mode_code_maps_modes_and_auto_follows_shuffle() {
+        assert_eq!(rg_mode_code(ReplayGainMode::Off, true), RG_OFF);
+        assert_eq!(rg_mode_code(ReplayGainMode::Track, false), RG_TRACK);
+        assert_eq!(rg_mode_code(ReplayGainMode::Album, true), RG_ALBUM);
+        assert_eq!(rg_mode_code(ReplayGainMode::Auto, true), RG_TRACK);
+        assert_eq!(rg_mode_code(ReplayGainMode::Auto, false), RG_ALBUM);
+    }
 
     fn secs(n: u64) -> Duration {
         Duration::from_secs(n)

@@ -257,6 +257,7 @@ impl App {
             last_frame: Instant::now(),
         };
         app.push_eq();
+        app.publish_replay_gain();
         app.mpris.send(MprisUpdate::Volume(app.cfg.volume as f64));
         app.mpris.send(MprisUpdate::Shuffle(app.cfg.shuffle));
         app.mpris.send(MprisUpdate::Repeat(app.cfg.repeat));
@@ -274,9 +275,10 @@ impl App {
             // Restore the last track without starting playback; paused at the
             // old position if khz-player quit mid-track.
             let path = t.path.clone();
+            let gain = t.replay_gain;
             app.audio.send(match app.cfg.last_position_ms {
-                Some(ms) => Command::Resume { path, at: Duration::from_millis(ms) },
-                None => Command::Load { path, play: false },
+                Some(ms) => Command::Resume { path, at: Duration::from_millis(ms), gain },
+                None => Command::Load { path, play: false, gain },
             });
         }
         // Entries outside the library have no cached tags; read them off the UI thread,

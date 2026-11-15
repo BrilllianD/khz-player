@@ -140,7 +140,51 @@ fn playback(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn audio(app: &mut App, ui: &mut egui::Ui) {
-    ui.label(RichText::new("No settings here yet.").color(app.theme.text_dim));
+    use crate::config::ReplayGainMode as M;
+    ui.label("ReplayGain");
+    let mut mode = app.cfg.replaygain.mode;
+    ui.horizontal(|ui| {
+        ui.label("Mode");
+        let shown = match mode {
+            M::Off => "Off",
+            M::Track => "Track",
+            M::Album => "Album",
+            M::Auto => "Auto (album; track when shuffled)",
+        };
+        egui::ComboBox::from_id_salt("rg-mode")
+            .selected_text(shown)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut mode, M::Off, "Off");
+                ui.selectable_value(&mut mode, M::Track, "Track");
+                ui.selectable_value(&mut mode, M::Album, "Album");
+                ui.selectable_value(&mut mode, M::Auto, "Auto (album; track when shuffled)");
+            });
+    });
+    if mode != app.cfg.replaygain.mode {
+        app.cfg.replaygain.mode = mode;
+        app.mark_cfg();
+        app.publish_replay_gain();
+    }
+    ui.add_enabled_ui(mode != M::Off, |ui| {
+        let mut preamp = app.cfg.replaygain.preamp_db;
+        let mut untagged = app.cfg.replaygain.untagged_db;
+        let mut changed = false;
+        for (label, v) in [("Preamp", &mut preamp), ("Untagged tracks", &mut untagged)] {
+            ui.horizontal(|ui| {
+                ui.label(label);
+                changed |= ui
+                    .add(egui::Slider::new(v, -15.0..=15.0).step_by(0.5).suffix(" dB"))
+                    .changed();
+            });
+        }
+        if changed {
+            app.cfg.replaygain.preamp_db = preamp;
+            app.cfg.replaygain.untagged_db = untagged;
+            app.mark_cfg();
+            app.publish_replay_gain();
+        }
+    });
+    ui.label(RichText::new("Peaks are never clipped.").color(app.theme.text_dim));
 }
 
 fn appearance(app: &mut App, ui: &mut egui::Ui) {

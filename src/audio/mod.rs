@@ -16,6 +16,8 @@ use crossbeam_channel::{Receiver, Sender};
 pub use decoder::TrackInfo;
 use shared::Shared;
 
+use crate::library::ReplayGain;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PlayerState {
     #[default]
@@ -26,9 +28,9 @@ pub enum PlayerState {
 
 #[derive(Debug)]
 pub enum Command {
-    Load { path: PathBuf, play: bool },
+    Load { path: PathBuf, play: bool, gain: ReplayGain },
     /// Loads `path` paused at `at`; restores the previous session.
-    Resume { path: PathBuf, at: Duration },
+    Resume { path: PathBuf, at: Duration, gain: ReplayGain },
     Play,
     Pause,
     Stop,
@@ -36,7 +38,7 @@ pub enum Command {
     /// Relative seek in milliseconds.
     SeekRel(i64),
     /// Opens the next track ahead of time for gapless playback.
-    PrefetchNext(Option<PathBuf>),
+    PrefetchNext(Option<(PathBuf, ReplayGain)>),
     /// The output was reopened: feed `ring` at `rate` from now on.
     SetOutput { ring: rtrb::Producer<f32>, rate: u32 },
     Shutdown,

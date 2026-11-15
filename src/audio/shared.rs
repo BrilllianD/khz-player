@@ -1,9 +1,15 @@
 //! Lock-free state shared between UI, engine thread and the realtime callback.
 
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 use crate::audio::dsp::EqParams;
 use crate::config::BANDS;
+use crate::library::ReplayGain;
+
+/// ReplayGain mode codes stored in `Shared::rg_mode`. Any other value acts like `RG_TRACK`.
+pub const RG_OFF: u8 = 0;
+pub const RG_TRACK: u8 = 1;
+pub const RG_ALBUM: u8 = 2;
 
 #[derive(Default)]
 pub struct AtomicF32(AtomicU32);
@@ -39,6 +45,11 @@ pub struct Shared {
     pub eq_enabled: AtomicBool,
     pub eq_preamp: AtomicF32,
     pub eq_bands: [AtomicF32; BANDS],
+    /// ReplayGain mode (`RG_*`), preamp and gain of untagged tracks; the engine
+    /// reads them on every `fill`, so a change is audible after the buffer drains.
+    pub rg_mode: AtomicU8,
+    pub rg_preamp_db: AtomicF32,
+    pub rg_untagged_db: AtomicF32,
     /// Number of frames in the spectrum tap that were dropped (diagnostics only).
     pub tap_overflow: AtomicU64,
     /// Buffer underruns/overruns reported by the stream; the engine logs the count.
@@ -62,6 +73,9 @@ impl Shared {
             eq_enabled: AtomicBool::new(false),
             eq_preamp: AtomicF32::new(0.0),
             eq_bands: Default::default(),
+            rg_mode: AtomicU8::new(RG_OFF),
+            rg_preamp_db: AtomicF32::new(0.0),
+            rg_untagged_db: AtomicF32::new(0.0),
             tap_overflow: AtomicU64::new(0),
             xruns: AtomicU64::new(0),
             device_lost: AtomicBool::new(false),
@@ -88,6 +102,16 @@ impl Shared {
         }
     }
 
+    /// Linear ReplayGain factor for a track with tags `rg`.
+    pub fn rg_factor(&self, rg: &ReplayGain) -> f32 {
+        replay_gain_factor(
+            rg,
+            self.rg_mode.load(Ordering::Relaxed),
+            self.rg_preamp_db.load(),
+            self.rg_untagged_db.load(),
+        )
+    }
+
     /// Frames of the current track that have been played.
     pub fn position_frames(&self) -> u64 {
         let c = self.consumed.load(Ordering::Acquire) as i64;
@@ -96,5 +120,99 @@ impl Shared {
 
     pub fn out_rate(&self) -> u32 {
         self.out_rate.load(Ordering::Relaxed)
+    }
+}
+
+/// Linear factor for a track: the tagged gain for `mode` with fallbacks, else
+/// `untagged_db`, plus `preamp_db`, capped so the peak stays at or below 1.0.
+pub fn replay_gain_factor(rg: &ReplayGain, mode: u8, preamp_db: f32, untagged_db: f32) -> f32 {
+    if mode == RG_OFF {
+        return 1.0;
+    }
+    let pair = |g: Option<f32>, peak: Option<f32>| g.filter(|g| g.is_finite()).map(|g| (g, peak));
+    let track = pair(rg.track_gain_db, rg.track_peak);
+    let album = pair(rg.album_gain_db, rg.album_peak);
+    let chosen = if mode == RG_ALBUM { album.or(track) } else { track.or(album) };
+    let (db, peak) = chosen.unwrap_or((untagged_db, None));
+    let mut lin = 10f32.powf((db + preamp_db) / 20.0);
+    if let Some(p) = peak.filter(|p| p.is_finite() && *p > 0.0) {
+        lin = lin.min(1.0 / p);
+    }
+    lin
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tagged(track: Option<f32>, album: Option<f32>) -> ReplayGain {
+        ReplayGain {
+            track_gain_db: track,
+            album_gain_db: album,
+            ..Default::default()
+        }
+    }
+
+    fn near(a: f32, b: f32) {
+        assert!((a - b).abs() < 1e-3, "{a} != {b}");
+    }
+
+    #[test]
+    fn off_is_exactly_one() {
+        assert_eq!(replay_gain_factor(&tagged(Some(-6.0), None), RG_OFF, 3.0, -6.0), 1.0);
+        assert_eq!(replay_gain_factor(&ReplayGain::default(), RG_OFF, 0.0, -6.0), 1.0);
+    }
+
+    #[test]
+    fn track_gain_applies() {
+        near(replay_gain_factor(&tagged(Some(-6.0206), None), RG_TRACK, 0.0, 0.0), 0.5);
+    }
+
+    #[test]
+    fn track_mode_falls_back_to_album() {
+        near(replay_gain_factor(&tagged(None, Some(-6.0206)), RG_TRACK, 0.0, 0.0), 0.5);
+    }
+
+    #[test]
+    fn album_mode_prefers_album() {
+        near(replay_gain_factor(&tagged(Some(0.0), Some(-6.0206)), RG_ALBUM, 0.0, 0.0), 0.5);
+        near(replay_gain_factor(&tagged(Some(-6.0206), Some(0.0)), RG_TRACK, 0.0, 0.0), 0.5);
+    }
+
+    #[test]
+    fn untagged_uses_untagged_gain() {
+        near(replay_gain_factor(&ReplayGain::default(), RG_TRACK, 0.0, -6.0206), 0.5);
+    }
+
+    #[test]
+    fn preamp_is_added() {
+        near(replay_gain_factor(&tagged(Some(0.0), None), RG_TRACK, 6.0206, 0.0), 2.0);
+    }
+
+    #[test]
+    fn peak_caps_the_gain() {
+        let rg = ReplayGain {
+            track_gain_db: Some(6.0),
+            track_peak: Some(0.9),
+            ..Default::default()
+        };
+        near(replay_gain_factor(&rg, RG_TRACK, 0.0, 0.0), 1.0 / 0.9);
+    }
+
+    #[test]
+    fn bad_peak_is_ignored() {
+        for peak in [Some(0.0), None, Some(f32::NAN)] {
+            let rg = ReplayGain {
+                track_gain_db: Some(6.0206),
+                track_peak: peak,
+                ..Default::default()
+            };
+            near(replay_gain_factor(&rg, RG_TRACK, 0.0, 0.0), 2.0);
+        }
+    }
+
+    #[test]
+    fn nan_gain_falls_back_to_other() {
+        near(replay_gain_factor(&tagged(Some(f32::NAN), Some(-6.0206)), RG_TRACK, 0.0, 0.0), 0.5);
     }
 }
