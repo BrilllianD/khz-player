@@ -113,9 +113,12 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // Another instance may be migrating at the same time: take the write lock first,
         // then re-check the version and the columns under it.
         conn.execute_batch("BEGIN IMMEDIATE;")?;
-        let r = migrate_v6(conn);
-        conn.execute_batch(if r.is_ok() { "COMMIT;" } else { "ROLLBACK;" })?;
-        r?;
+        if let Err(e) = migrate_v6(conn) {
+            // Keep the migration error; a failed rollback ends with the connection anyway.
+            let _ = conn.execute_batch("ROLLBACK;");
+            return Err(e);
+        }
+        conn.execute_batch("COMMIT;")?;
     }
     Ok(())
 }
