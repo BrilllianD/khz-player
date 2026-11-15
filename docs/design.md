@@ -76,7 +76,7 @@ src/
   library/art.rs     cover lookup: embedded front/first picture (cached by hash) or cover/folder/front.jpg|png; cache ~/.cache/khz-player/art
   playlist.rs        in-memory Playlist (Vec<Track>, cursor, shuffle order, repeat, play queue (session only)), next/prev
   m3u.rs             parse/write M3U/M3U8 (#EXTM3U/#EXTINF, relative paths)
-  mpris.rs           thread: mpris-server Player, zbus::block_on, Command sender + async_channel updates
+  mpris.rs           thread: mpris-server Player, zbus::block_on, Command sender + async_channel updates, desktop notification on track change (org.freedesktop.Notifications)
   shortcuts.rs       key map -> Action
   ui/mod.rs          layout root: main / eq / playlist stack, library SidePanel::right
   ui/main_panel.rs   title strip, digits, marquee, spectrum, kbps/kHz, seek, vol/bal, transport, toggles

@@ -54,6 +54,12 @@ pub enum MprisUpdate {
     Caps(Caps),
     /// Cover of the current track; None clears mpris:artUrl.
     Art(Option<std::path::PathBuf>),
+    /// Desktop notification for a started track (org.freedesktop.Notifications).
+    Notify {
+        summary: String,
+        body: String,
+        icon: Option<std::path::PathBuf>,
+    },
 }
 
 /// What the app can currently do; drives the MPRIS Can* properties.
@@ -97,6 +103,53 @@ fn repeat_from(l: LoopStatus) -> Repeat {
 }
 
 /// Percent-encoded `file://` URL; every byte outside the unreserved set and `/` is escaped.
+/// Notify only when enabled and the window is known to be unfocused.
+pub fn should_notify(enabled: bool, focused: Option<bool>) -> bool {
+    enabled && focused == Some(false)
+}
+
+/// Notification body: artist and album joined by an em dash, markup escaped.
+pub fn notify_body(artist: Option<&str>, album: Option<&str>) -> String {
+    let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+    [artist, album]
+        .into_iter()
+        .flatten()
+        .filter(|s| !s.is_empty())
+        .map(esc)
+        .collect::<Vec<_>>()
+        .join(" — ")
+}
+
+async fn notify(
+    conn: &mpris_server::zbus::Connection,
+    replaces_id: u32,
+    summary: &str,
+    body: &str,
+    icon: Option<&Path>,
+) -> mpris_server::zbus::Result<u32> {
+    use mpris_server::zbus::zvariant::Value;
+    let hints: std::collections::HashMap<&str, Value> = std::collections::HashMap::new();
+    let reply = conn
+        .call_method(
+            Some("org.freedesktop.Notifications"),
+            "/org/freedesktop/Notifications",
+            Some("org.freedesktop.Notifications"),
+            "Notify",
+            &(
+                "khz-player",
+                replaces_id,
+                icon.map(file_url).unwrap_or_default(),
+                summary,
+                body,
+                Vec::<&str>::new(),
+                hints,
+                -1i32,
+            ),
+        )
+        .await?;
+    reply.body().deserialize::<u32>()
+}
+
 fn file_url(path: &Path) -> String {
     let mut url = String::from("file://");
     for &b in path.as_os_str().as_bytes() {
@@ -293,6 +346,8 @@ async fn serve(
     }
 
     let update_loop = async {
+        let mut notify_conn: Option<mpris_server::zbus::Connection> = None;
+        let mut notify_id: u32 = 0;
         while let Ok(u) = updates.recv().await {
             let r = match u {
                 MprisUpdate::Status(s) => {
@@ -331,6 +386,19 @@ async fn serve(
                     m.set_art_url(art.map(|p| file_url(&p)));
                     player.set_metadata(m).await
                 }
+                MprisUpdate::Notify { summary, body, icon } => {
+                    if notify_conn.is_none() {
+                        notify_conn = mpris_server::zbus::Connection::session().await.ok();
+                    }
+                    match &notify_conn {
+                        Some(conn) => {
+                            notify(conn, notify_id, &summary, &body, icon.as_deref())
+                                .await
+                                .map(|id| notify_id = id)
+                        }
+                        None => Ok(()),
+                    }
+                }
                 MprisUpdate::Position(p) => {
                     player.set_position(time(p));
                     Ok(())
@@ -368,6 +436,23 @@ mod tests {
 
     fn tid(n: u64) -> TrackId {
         track_id(n)
+    }
+
+    #[test]
+    fn should_notify_only_when_enabled_and_unfocused() {
+        assert!(should_notify(true, Some(false)));
+        assert!(!should_notify(true, Some(true)));
+        assert!(!should_notify(true, None));
+        assert!(!should_notify(false, Some(false)));
+    }
+
+    #[test]
+    fn notify_body_escapes_and_joins() {
+        assert_eq!(notify_body(Some("A&B"), Some("<X>")), "A&amp;B — &lt;X&gt;");
+        assert_eq!(notify_body(Some("A"), None), "A");
+        assert_eq!(notify_body(None, Some("B")), "B");
+        assert_eq!(notify_body(Some(""), None), "");
+        assert_eq!(notify_body(None, None), "");
     }
 
     #[test]

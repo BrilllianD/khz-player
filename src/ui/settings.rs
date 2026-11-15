@@ -137,6 +137,13 @@ fn playback(app: &mut App, ui: &mut egui::Ui) {
     if toggle {
         app.toggle_sleep();
     }
+    if ui
+        .checkbox(&mut app.cfg.notify_track_change, "Notify on track change")
+        .changed()
+    {
+        app.mark_cfg();
+    }
+    ui.label(RichText::new("Only while the window is unfocused.").color(app.theme.text_dim));
 }
 
 fn audio(app: &mut App, ui: &mut egui::Ui) {

@@ -133,13 +133,23 @@ impl App {
         }
     }
 
-    /// Called once per started track, only while it is current; slice 10 adds the notification here.
+    /// Called once per started track, only while it is current; sends the cover and the notification.
     pub(super) fn on_cover_ready(&mut self, track: &Path, cover: Option<PathBuf>) {
         if self.now.as_ref().is_none_or(|n| n.path != track) {
             return;
         }
         self.cover = cover.clone();
-        self.mpris.send(MprisUpdate::Art(cover));
+        self.mpris.send(MprisUpdate::Art(cover.clone()));
+        let focused = self.ctx.input(|i| i.viewport().focused);
+        if mpris::should_notify(self.cfg.notify_track_change, focused)
+            && let Some(t) = self.now_track.as_ref().filter(|t| t.path == track)
+        {
+            self.mpris.send(MprisUpdate::Notify {
+                summary: t.display_title(),
+                body: mpris::notify_body(t.artist.as_deref(), t.album.as_deref()),
+                icon: cover,
+            });
+        }
     }
 
     pub(super) fn on_track_started(&mut self, info: TrackInfo, gapless: bool) {

@@ -168,6 +168,10 @@ khz-player registers as `org.mpris.MediaPlayer2.khz-player`. The cover (embedded
 `cover`/`folder`/`front` `.jpg`/`.png` next to the file) is published as `mpris:artUrl`;
 embedded covers are cached in `~/.cache/khz-player/art`.
 
+Settings > Playback has "Notify on track change" (off by default): while the window is
+unfocused, each started track shows a desktop notification with title, artist, album and cover.
+It needs a notification daemon such as mako or swaync.
+
 Running `khz-player FILE…` while it is already open adds the files to the current
 playlist of the running window.
 

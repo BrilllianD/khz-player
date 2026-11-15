@@ -87,6 +87,8 @@ pub struct Config {
     pub gapless: bool,
     /// Sleep timer length in minutes (Ctrl+S).
     pub sleep_minutes: u32,
+    /// Desktop notification on each started track while the window is unfocused.
+    pub notify_track_change: bool,
     pub eq: EqConfig,
     /// Loudness normalisation from the file tags (Settings, Audio).
     pub replaygain: ReplayGainConfig,
@@ -117,6 +119,7 @@ impl Default for Config {
             animation_fps: 30,
             gapless: true,
             sleep_minutes: 30,
+            notify_track_change: false,
             eq: EqConfig::default(),
             replaygain: ReplayGainConfig::default(),
             window: WindowConfig::default(),
@@ -284,7 +287,14 @@ mod tests {
         assert!(c.show_playlist);
         assert!(c.gapless);
         assert_eq!(c.sleep_minutes, 30);
+        assert!(!c.notify_track_change);
         assert_eq!(c.replaygain, ReplayGainConfig::default());
+    }
+
+    #[test]
+    fn notify_track_change_loads() {
+        let c: Config = toml::from_str("notify_track_change = true\n").unwrap();
+        assert!(c.notify_track_change);
     }
 
     #[test]
