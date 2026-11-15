@@ -6,3 +6,7 @@ A16 (task 37) covers the per-sample gain ramp and the soft clip. Only the dB vol
 
 on it
 
+## 2026-11-15T07:32:44Z — Bronnikov Aleksandr
+
+b9b89d9: channel_gains on 50 dB taper
+
