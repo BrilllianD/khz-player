@@ -14,6 +14,7 @@ A Winamp-classic style music player for Linux, written in Rust.
 - ReplayGain (track, album or auto) with preamp and a gain for untagged tracks; peaks are never clipped.
 - Output device choice (Settings, Audio): any PulseAudio sink, or the system default.
 - MPRIS, so media keys and desktop widgets can control it, with cover art.
+- File info dialog (Alt+3 or right-click): tags, format, ReplayGain and cover.
 - Optional cover of the current track in the main window (off by default).
 - Uses the current Omarchy theme colors and follows theme switches;
   falls back to the classic Winamp palette elsewhere.
@@ -107,6 +108,7 @@ newer glibc.
 | `Ctrl+V` | Stop after the current track (toggle) |
 | `Ctrl+S` | Start / cancel the sleep timer (fades out over 10 s, then pauses) |
 | `Alt+G` / `Alt+E` / `Alt+L` | Show or hide equalizer / playlist / library |
+| `Alt+3` | File info of the cursor track (or the playing one) |
 
 Clicking the playlist gives it keyboard focus (its border turns the accent
 color); clicking anywhere else or hiding it returns the arrows to volume.

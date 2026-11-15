@@ -30,6 +30,8 @@ pub enum Action {
     /// Ctrl+S: start or cancel the sleep timer.
     SleepTimer,
     PlaySelected,
+    /// Alt+3: file info of the cursor track (or the playing one).
+    FileInfo,
     SelectAll,
     Settings,
     /// Elapsed / remaining time on the digits.
@@ -59,6 +61,7 @@ const BINDINGS: &[(Modifiers, Key, Action)] = &[
     (Modifiers::ALT, Key::G, Action::ToggleEq),
     (Modifiers::ALT, Key::E, Action::TogglePlaylist),
     (Modifiers::ALT, Key::L, Action::ToggleLibrary),
+    (Modifiers::ALT, Key::Num3, Action::FileInfo),
     (Modifiers::NONE, Key::L, Action::AddFiles),
     (Modifiers::NONE, Key::J, Action::Jump),
     (Modifiers::NONE, Key::Q, Action::EnqueueSelected),
@@ -187,6 +190,12 @@ mod tests {
         assert_eq!(press(false, Modifiers::ALT, Key::L), [Action::ToggleLibrary]);
         assert_eq!(press(false, Modifiers::NONE, Key::L), [Action::AddFiles]);
         assert_eq!(press(false, Modifiers::CTRL, Key::P), [Action::Settings]);
+    }
+
+    #[test]
+    fn alt_3_opens_file_info() {
+        assert_eq!(press(false, Modifiers::ALT, Key::Num3), [Action::FileInfo]);
+        assert_eq!(press(true, Modifiers::ALT, Key::Num3), [Action::FileInfo]);
     }
 
     #[test]

@@ -134,6 +134,8 @@ pub fn refresh(cache: &mut Cache, library: &[Track], generation: u64, query: &st
 pub enum Act {
     Add(Vec<usize>),
     Replace(Vec<usize>),
+    /// Open the file info dialog for one track (library index).
+    Info(usize),
 }
 
 pub fn show(app: &mut App, ui: &mut Ui) {
@@ -221,6 +223,11 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     match act {
         Some(Act::Add(v)) => app.add_library_tracks(&v, false),
         Some(Act::Replace(v)) => app.add_library_tracks(&v, true),
+        Some(Act::Info(i)) => {
+            if let Some(t) = app.library.get(i).cloned() {
+                app.open_info(t)
+            }
+        }
         None => {}
     }
 }
@@ -387,6 +394,10 @@ pub fn tree(ui: &mut Ui, cache: &mut Cache, lib: &[Track], searching: bool, them
                                 }
                                 if ui.button("Play now").clicked() {
                                     act = Some(Act::Replace(vec![i]));
+                                    ui.close();
+                                }
+                                if ui.button("File info (Alt+3)").clicked() {
+                                    act = Some(Act::Info(i));
                                     ui.close();
                                 }
                             });

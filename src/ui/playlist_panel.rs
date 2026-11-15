@@ -123,6 +123,7 @@ fn rows(app: &mut App, ui: &mut Ui) {
     let mut play: Option<usize> = None;
     let mut remove_ctx = false;
     let mut queue_ctx = false;
+    let mut info_ctx: Option<usize> = None;
     // Drag-reorder: set when a row drag starts, cleared on release.
     let drag_id = egui::Id::new(("pl-drag", active));
     let mut dragging = ui.ctx().data(|d| d.get_temp::<bool>(drag_id)).unwrap_or(false);
@@ -254,6 +255,10 @@ fn rows(app: &mut App, ui: &mut Ui) {
                     queue_ctx = true;
                     ui.close();
                 }
+                if ui.button("File info (Alt+3)").clicked() {
+                    info_ctx = Some(i);
+                    ui.close();
+                }
                 if ui.button("Remove selected").clicked() {
                     remove_ctx = true;
                     ui.close();
@@ -329,6 +334,11 @@ fn rows(app: &mut App, ui: &mut Ui) {
     }
     if queue_ctx {
         app.enqueue_selected();
+    }
+    if let Some(i) = info_ctx
+        && let Some(t) = app.playlists[active].tracks.get(i).cloned()
+    {
+        app.open_info(t);
     }
 }
 

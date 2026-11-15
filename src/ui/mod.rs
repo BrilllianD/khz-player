@@ -1,5 +1,6 @@
 pub mod cover;
 pub mod eq_panel;
+pub mod info_dialog;
 pub mod jump_dialog;
 pub mod library_panel;
 pub mod main_panel;
@@ -121,6 +122,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
 
     prompt_modal(app, &ctx);
     jump_dialog::show(app, &ctx);
+    info_dialog::show(app, &ctx);
     settings::show(app, &ctx);
     toasts(app, &ctx);
     resize_grip(&ctx, &app.theme);

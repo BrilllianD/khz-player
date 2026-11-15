@@ -90,6 +90,7 @@ pub struct App {
     /// Cover of the current track (C7); None until its lookup answers.
     pub cover: Option<PathBuf>,
     pub cover_tex: crate::ui::cover::CoverTexture,
+    pub info_cover: crate::ui::cover::CoverTexture,
     cover_tx: crossbeam_channel::Sender<(u64, PathBuf, Option<PathBuf>)>,
     cover_rx: Receiver<(u64, PathBuf, Option<PathBuf>)>,
     /// While dragging the seek bar: fraction 0..1.
@@ -128,6 +129,7 @@ pub struct App {
     pub prompt: Option<Prompt>,
     pub settings_open: bool,
     pub jump: Option<JumpState>,
+    pub info: Option<Track>,
     pub toasts: Vec<(String, Instant)>,
     /// Scroll the playlist to this row on the next frame.
     pub scroll_to: Option<(usize, ui::playlist_panel::ScrollMode)>,
@@ -227,6 +229,7 @@ impl App {
             track_counter: 0,
             cover: None,
             cover_tex: crate::ui::cover::CoverTexture::new("cover"),
+            info_cover: crate::ui::cover::CoverTexture::new("info-cover"),
             cover_tx,
             cover_rx,
             seek_drag: None,
@@ -252,6 +255,7 @@ impl App {
             prompt: None,
             settings_open: false,
             jump: None,
+            info: None,
             toasts: Vec::new(),
             scroll_to: None,
             playlist_focus: false,
@@ -402,6 +406,19 @@ impl App {
                     self.play_index(self.active, i);
                 }
             }
+            Action::FileInfo => {
+                let pl = &self.playlists[self.active];
+                let row = pl
+                    .cursor
+                    .filter(|&c| c < pl.len())
+                    .or_else(|| pl.selected.first().copied());
+                let t = row
+                    .and_then(|i| pl.tracks.get(i).cloned())
+                    .or_else(|| self.now_track.clone());
+                if let Some(t) = t {
+                    self.open_info(t);
+                }
+            }
             Action::SelectAll => self.playlists[self.active].select_all(),
             Action::Settings => self.settings_open = true,
             Action::ToggleTimeDisplay => {
@@ -409,6 +426,10 @@ impl App {
                 self.mark_cfg();
             }
         }
+    }
+
+    pub fn open_info(&mut self, t: Track) {
+        self.info = Some(t);
     }
 
     pub fn resize_window(&mut self, ctx: &egui::Context) {
@@ -440,6 +461,7 @@ impl eframe::App for App {
 
         if !ctx.egui_wants_keyboard_input() && self.prompt.is_none()
             && self.jump.is_none()
+            && self.info.is_none()
             && !self.settings_open
         {
             for a in shortcuts::collect(ctx, self.playlist_focus) {
