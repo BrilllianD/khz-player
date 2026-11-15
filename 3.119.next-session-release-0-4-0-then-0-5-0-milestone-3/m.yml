@@ -3,9 +3,10 @@ tags:
 - plan
 assignee: claude
 created: 2026-11-15T09:45:17Z
-updated: 2026-11-15T09:45:17Z
+updated: 2026-11-15T09:45:37Z
 attachments: []
-links: []
+links:
+- file:///home/bronnikov/.claude/plans/elegant-noodling-papert.md
 related:
 - '117'
 - '19'
