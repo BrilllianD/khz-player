@@ -110,17 +110,28 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // ReplayGain columns. Unlike v4 the rows stay: mtime = -1 never matches a file
         // stamp, so the next scan re-reads every file, and App::new starts that scan
         // (`needs_rescan`).
-        // Another instance may have added some columns already: skip those.
-        let mut sql = String::from("BEGIN; ");
-        for col in ["rg_track_gain", "rg_track_peak", "rg_album_gain", "rg_album_peak"] {
-            if !has_column(conn, "tracks", col)? {
-                sql.push_str(&format!("ALTER TABLE tracks ADD COLUMN {col} REAL; "));
-            }
-        }
-        sql.push_str("UPDATE tracks SET mtime = -1; PRAGMA user_version = 6; COMMIT;");
-        conn.execute_batch(&sql)?;
+        // Another instance may be migrating at the same time: take the write lock first,
+        // then re-check the version and the columns under it.
+        conn.execute_batch("BEGIN IMMEDIATE;")?;
+        let r = migrate_v6(conn);
+        conn.execute_batch(if r.is_ok() { "COMMIT;" } else { "ROLLBACK;" })?;
+        r?;
     }
     Ok(())
+}
+
+/// Runs inside a write transaction. No-op when another instance already migrated.
+fn migrate_v6(conn: &Connection) -> rusqlite::Result<()> {
+    let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    if version >= 6 {
+        return Ok(());
+    }
+    for col in ["rg_track_gain", "rg_track_peak", "rg_album_gain", "rg_album_peak"] {
+        if !has_column(conn, "tracks", col)? {
+            conn.execute_batch(&format!("ALTER TABLE tracks ADD COLUMN {col} REAL;"))?;
+        }
+    }
+    conn.execute_batch("UPDATE tracks SET mtime = -1; PRAGMA user_version = 6;")
 }
 
 fn has_column(conn: &Connection, table: &str, col: &str) -> rusqlite::Result<bool> {
@@ -450,6 +461,20 @@ mod tests {
             .unwrap();
         assert_eq!((n, mtime), (1, -1));
         assert!(has_column(&conn, "tracks", "rg_album_peak").unwrap());
+    }
+
+    #[test]
+    fn v6_step_skips_when_another_instance_finished_first() {
+        // The caller read v5 before the lock; under the lock the DB is already v6.
+        let conn = open_memory().unwrap();
+        conn.execute(
+            "INSERT INTO tracks (path, mtime, size) VALUES (CAST('/m/a.mp3' AS BLOB), 7, 2)",
+            [],
+        )
+        .unwrap();
+        migrate_v6(&conn).unwrap();
+        let mtime: i64 = conn.query_row("SELECT mtime FROM tracks", [], |r| r.get(0)).unwrap();
+        assert_eq!(mtime, 7, "a finished migration must not be redone");
     }
 
     #[test]
