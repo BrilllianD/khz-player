@@ -11,7 +11,7 @@ A Winamp-classic style music player for Linux, written in Rust.
 - Media library scanned from your music folders, with a search box.
 - Gapless playback (can be turned off); MP3 (and MP1/MP2), FLAC, Ogg Vorbis, AAC and ALAC in
   M4A/MP4, WAV and AIFF. Opus, WavPack, APE and Musepack are not supported.
-- MPRIS, so media keys and desktop widgets can control it.
+- MPRIS, so media keys and desktop widgets can control it, with cover art.
 - Uses the current Omarchy theme colors and follows theme switches;
   falls back to the classic Winamp palette elsewhere.
 
@@ -163,7 +163,9 @@ hl.window_rule({ match = { class = "^(khz-player)$" }, float = true, size = { 56
 
 ## MPRIS
 
-khz-player registers as `org.mpris.MediaPlayer2.khz-player`.
+khz-player registers as `org.mpris.MediaPlayer2.khz-player`. The cover (embedded, or
+`cover`/`folder`/`front` `.jpg`/`.png` next to the file) is published as `mpris:artUrl`;
+embedded covers are cached in `~/.cache/khz-player/art`.
 
 Running `khz-player FILE…` while it is already open adds the files to the current
 playlist of the running window.

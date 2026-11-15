@@ -1,4 +1,5 @@
 use super::*;
+use crate::library::art;
 use crate::ui::playlist_panel::ScrollMode;
 
 /// Minimum time between attempts to reopen a lost audio output.
@@ -108,6 +109,39 @@ impl App {
         }
     }
 
+    fn spawn_cover_lookup(&self, id: u64, path: PathBuf) {
+        let tx = self.cover_tx.clone();
+        let ctx = self.ctx.clone();
+        let p = path.clone();
+        let spawned = std::thread::Builder::new().name("cover".into()).spawn(move || {
+            let cover = art::find(&p);
+            let _ = tx.send((id, p, cover));
+            ctx.request_repaint();
+        });
+        if let Err(e) = spawned {
+            tracing::warn!("cover thread: {e}");
+            let _ = self.cover_tx.send((id, path, None));
+        }
+    }
+
+    pub(super) fn handle_cover_events(&mut self) {
+        let done: Vec<_> = self.cover_rx.try_iter().collect();
+        for (id, path, cover) in done {
+            if id == self.track_counter {
+                self.on_cover_ready(&path, cover);
+            }
+        }
+    }
+
+    /// Called once per started track, only while it is current; slice 10 adds the notification here.
+    pub(super) fn on_cover_ready(&mut self, track: &Path, cover: Option<PathBuf>) {
+        if self.now.as_ref().is_none_or(|n| n.path != track) {
+            return;
+        }
+        self.cover = cover.clone();
+        self.mpris.send(MprisUpdate::Art(cover));
+    }
+
     pub(super) fn on_track_started(&mut self, info: TrackInfo, gapless: bool) {
         self.load_failures = 0;
         self.failed.remove(&info.path);
@@ -138,6 +172,8 @@ impl App {
             length: info.duration.or(track.duration()),
             path: info.path.clone(),
         });
+        self.cover = None;
+        self.spawn_cover_lookup(self.track_counter, info.path.clone());
         self.auto_eq_for(&info.path);
         self.now_track = Some(track);
         self.now = Some(info);

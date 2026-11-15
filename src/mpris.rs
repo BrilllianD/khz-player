@@ -52,6 +52,8 @@ pub enum MprisUpdate {
     Shuffle(bool),
     Repeat(Repeat),
     Caps(Caps),
+    /// Cover of the current track; None clears mpris:artUrl.
+    Art(Option<std::path::PathBuf>),
 }
 
 /// What the app can currently do; drives the MPRIS Can* properties.
@@ -323,6 +325,11 @@ async fn serve(
                     b = b.url(file_url(&path));
                     player.set_position(Time::ZERO);
                     player.set_metadata(b.build()).await
+                }
+                MprisUpdate::Art(art) => {
+                    let mut m = player.metadata().clone(); // Ref dropped before the await
+                    m.set_art_url(art.map(|p| file_url(&p)));
+                    player.set_metadata(m).await
                 }
                 MprisUpdate::Position(p) => {
                     player.set_position(time(p));

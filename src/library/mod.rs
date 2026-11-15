@@ -1,4 +1,5 @@
 pub mod adder;
+pub mod art;
 pub mod db;
 pub mod scanner;
 pub mod tags;

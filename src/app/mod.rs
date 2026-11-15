@@ -87,6 +87,10 @@ pub struct App {
     /// Tag info of the loaded track (for the marquee).
     pub now_track: Option<Track>,
     track_counter: u64,
+    /// Cover of the current track (C7); None until its lookup answers.
+    pub cover: Option<PathBuf>,
+    cover_tx: crossbeam_channel::Sender<(u64, PathBuf, Option<PathBuf>)>,
+    cover_rx: Receiver<(u64, PathBuf, Option<PathBuf>)>,
     /// While dragging the seek bar: fraction 0..1.
     pub seek_drag: Option<f32>,
     pub marquee_start: Instant,
@@ -198,6 +202,7 @@ impl App {
         let mpris = mpris::start(ctx.clone());
         let (user_presets, presets_error) = eq_presets::load_user();
 
+        let (cover_tx, cover_rx) = crossbeam_channel::unbounded();
         let mut app = Self {
             ctx,
             builtin_presets: eq_presets::builtin(),
@@ -219,6 +224,9 @@ impl App {
             sleep: playback::Sleep::Off,
             now_track: None,
             track_counter: 0,
+            cover: None,
+            cover_tx,
+            cover_rx,
             seek_drag: None,
             marquee_start: Instant::now(),
             db,
@@ -411,6 +419,7 @@ impl eframe::App for App {
         self.last_frame = now;
 
         self.handle_audio_events();
+        self.handle_cover_events();
         self.handle_output_loss(now);
         self.handle_sleep(now);
         self.handle_scan_events();
