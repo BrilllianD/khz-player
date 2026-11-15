@@ -14,3 +14,7 @@ on it
 
 b15ce16: StallWatch in engine sets device_lost; output::retire drops old stream detached
 
+## 2026-11-15T05:23:11Z — Bronnikov Aleksandr
+
+7cd2827: retired stream error callback no longer sets device_lost; reopen keeps device_lost set until open returns so the stall watch cannot trip on the old ring
+
