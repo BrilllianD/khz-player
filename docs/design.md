@@ -110,6 +110,7 @@ pub enum Event { Loaded(TrackInfo), StateChanged(PlayerState), TrackEnded, Error
 - Position read by UI from `position_frames / out_rate` each frame (no events).
 - States: Stopped / Playing / Paused. Pause = stop pushing; callback outputs silence when ring empty, stream never paused.
 - Seek: `reader.seek(SeekMode::Accurate, SeekTo::Time{..})`, `decoder.reset()`, resampler reset, set `flush` flag, wait (<=120 ms) for callback to drain ring, set `position_frames`, discard frames until `required_ts`.
+- Gapless gate: `App::refresh_prefetch` sends `PrefetchNext(None)` when `gapless` is off or stop-after-current is armed. Sleep timer: `Shared::sleep_gain` is multiplied into the volume target in the callback; 10 s fade, then Pause, then 1.0.
 - Gapless: `PrefetchNext` opens next decoder in advance; on EOF swap decoders without flush; send `TrackEnded` + `Loaded(next)`.
 - symphonia 0.6 API: `probe(&hint, mss, fmt_opts, meta_opts)`, `default_track(TrackType::Audio)`, `codec_params.audio()`, `make_audio_decoder`, `next_packet -> Result<Option<Packet>>`, `decode -> GenericAudioBufferRef`, `copy_to_vec_interleaved`. `enable_gapless: true`.
 - cpal 0.18 API: `default_output_config()` (expect 48000), force 2 ch, `BufferSize::Fixed(1024)` with Default fallback, request f32 else iterate `supported_output_configs`; `build_output_stream(config, cb, err, None)`, `stream.start()`.
@@ -160,7 +161,7 @@ Omarchy mapping: bg=background, bg_dark=dark_background, bg_darker=darker_backgr
 Watch parent `~/.local/state/omarchy/current/` NonRecursive (symlink swapped atomically); re-resolve path on each reload.
 
 ### Shortcuts (only when `!ctx.wants_keyboard_input()`)
-Z prev, X play, C pause, V stop, B next, Space toggle, L add files (file dialog), J jump dialog, Left/Right ±5 s, Up/Down vol ±2% when the playlist is not focused (while focused: Up/Down cursor, Shift extends, PgUp/PgDn page, Home/End ends, Ctrl+Up/Down reorder selected; `PLAYLIST_BINDINGS`, consumed first; focus is set by a primary press in the CentralPanel), R repeat cycle Off/All/One, S shuffle, Alt+G EQ, Alt+E playlist, Alt+L library, Delete remove selected, Enter play the cursor row (or first selected), Ctrl+A select all, Ctrl+T elapsed/remaining time.
+Z prev, X play, C pause, V stop, B next, Space toggle, L add files (file dialog), J jump dialog, Left/Right ±5 s, Up/Down vol ±2% when the playlist is not focused (while focused: Up/Down cursor, Shift extends, PgUp/PgDn page, Home/End ends, Ctrl+Up/Down reorder selected; `PLAYLIST_BINDINGS`, consumed first; focus is set by a primary press in the CentralPanel), R repeat cycle Off/All/One, S shuffle, Alt+G EQ, Alt+E playlist, Alt+L library, Delete remove selected, Enter play the cursor row (or first selected), Ctrl+A select all, Ctrl+T elapsed/remaining time, Ctrl+V stop after current (bound on release: egui-winit turns the press into Paste), Ctrl+S sleep timer.
 
 ## Persistence
 

@@ -25,6 +25,10 @@ pub enum Action {
     RemoveSelected,
     /// Q: queue or unqueue the selection.
     EnqueueSelected,
+    /// Ctrl+V: stop when the current track ends (toggle).
+    StopAfterCurrent,
+    /// Ctrl+S: start or cancel the sleep timer.
+    SleepTimer,
     PlaySelected,
     SelectAll,
     Settings,
@@ -63,7 +67,14 @@ const BINDINGS: &[(Modifiers, Key, Action)] = &[
     (Modifiers::CTRL, Key::A, Action::SelectAll),
     (Modifiers::CTRL, Key::P, Action::Settings),
     (Modifiers::CTRL, Key::T, Action::ToggleTimeDisplay),
+    (Modifiers::CTRL, Key::S, Action::SleepTimer),
 ];
+
+/// Matched on key release. egui-winit turns a Ctrl+V press into `Event::Paste`
+/// (or into nothing when the clipboard is empty) and returns early, so only
+/// the release reaches egui as a Key event and a press binding never fires.
+const RELEASE_BINDINGS: &[(Modifiers, Key, Action)] =
+    &[(Modifiers::CTRL, Key::V, Action::StopAfterCurrent)];
 
 /// Consumed before BINDINGS while the playlist has focus. Ctrl and Shift
 /// rows first: an unset Shift is ignored when matching.
@@ -89,12 +100,24 @@ const PLAYLIST_BINDINGS: &[(Modifiers, Key, Action)] = &[
 pub fn collect(ctx: &egui::Context, playlist_focus: bool) -> Vec<Action> {
     ctx.input_mut(|i| {
         let first: &[_] = if playlist_focus { PLAYLIST_BINDINGS } else { &[] };
-        first
+        let mut actions: Vec<Action> = first
             .iter()
             .chain(BINDINGS)
             .filter(|(m, k, _)| i.consume_key(*m, *k))
             .map(|(_, _, a)| *a)
-            .collect()
+            .collect();
+        for (m, k, a) in RELEASE_BINDINGS {
+            i.events.retain(|e| match e {
+                egui::Event::Key { key, pressed: false, modifiers, .. }
+                    if key == k && modifiers.matches_logically(*m) =>
+                {
+                    actions.push(*a);
+                    false
+                }
+                _ => true,
+            });
+        }
+        actions
     })
 }
 
@@ -121,6 +144,39 @@ mod tests {
         ctx.run_ui(input, |ui| actions = collect(ui.ctx(), focus))
             .drop_without_applying_deltas();
         actions
+    }
+
+    fn release(focus: bool, modifiers: Modifiers, key: Key) -> Vec<Action> {
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            events: vec![
+                egui::Event::ModifiersChanged(modifiers),
+                egui::Event::Key {
+                    key,
+                    physical_key: Some(key),
+                    pressed: false,
+                    repeat: false,
+                    modifiers,
+                },
+            ],
+            ..Default::default()
+        };
+        let mut actions = Vec::new();
+        ctx.run_ui(input, |ui| actions = collect(ui.ctx(), focus))
+            .drop_without_applying_deltas();
+        actions
+    }
+
+    #[test]
+    fn stop_after_and_sleep_keys() {
+        let (c, n) = (Modifiers::CTRL, Modifiers::NONE);
+        assert_eq!(release(false, c, Key::V), [Action::StopAfterCurrent]);
+        assert_eq!(release(true, c, Key::V), [Action::StopAfterCurrent]);
+        assert!(press(false, c, Key::V).is_empty());
+        assert_eq!(press(false, n, Key::V), [Action::Stop]);
+        assert!(release(false, n, Key::V).is_empty());
+        assert_eq!(press(false, c, Key::S), [Action::SleepTimer]);
+        assert_eq!(press(false, n, Key::S), [Action::ToggleShuffle]);
     }
 
     #[test]

@@ -95,6 +95,15 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             theme.accent,
         );
     }
+    if let Some(t) = app.armed_label() {
+        widgets::small_label(
+            ui,
+            digits_r.right_top() + vec2(-8.0, 12.0),
+            Align2::RIGHT_CENTER,
+            &t,
+            theme.accent,
+        );
+    }
     if app.state == PlayerState::Paused {
         ctx.request_repaint_after(Duration::from_millis(500));
     }

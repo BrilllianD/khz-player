@@ -26,7 +26,9 @@ impl App {
                 }
                 Event::TrackEnded => {
                     let (repeat, shuffle) = (self.cfg.repeat, self.cfg.shuffle);
-                    if let Some(i) = self.playing().next(repeat, shuffle, true) {
+                    if std::mem::take(&mut self.stop_after) {
+                        // Stopped as asked.
+                    } else if let Some(i) = self.playing().next(repeat, shuffle, true) {
                         self.play_index(self.playing_list, i);
                     }
                 }

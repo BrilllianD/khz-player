@@ -34,6 +34,8 @@ pub struct Shared {
     pub paused: AtomicBool,
     pub volume: AtomicF32,
     pub balance: AtomicF32,
+    /// Sleep-timer fade, multiplied into the volume target; 1.0 when no fade runs.
+    pub sleep_gain: AtomicF32,
     pub eq_enabled: AtomicBool,
     pub eq_preamp: AtomicF32,
     pub eq_bands: [AtomicF32; BANDS],
@@ -56,6 +58,7 @@ impl Shared {
             paused: AtomicBool::new(false),
             volume: AtomicF32::new(volume),
             balance: AtomicF32::new(balance),
+            sleep_gain: AtomicF32::new(1.0),
             eq_enabled: AtomicBool::new(false),
             eq_preamp: AtomicF32::new(0.0),
             eq_bands: Default::default(),

@@ -329,7 +329,9 @@ impl CallbackState {
         channels: usize,
         retired: Arc<AtomicBool>,
     ) -> Self {
-        let gain = channel_gains(shared.volume.load(), shared.balance.load());
+        let (gl, gr) = channel_gains(shared.volume.load(), shared.balance.load());
+        let s = shared.sleep_gain.load();
+        let gain = (gl * s, gr * s);
         Self {
             shared,
             ring,
@@ -402,6 +404,8 @@ impl CallbackState {
         }
 
         let (gl, gr) = channel_gains(shared.volume.load(), shared.balance.load());
+        let s = shared.sleep_gain.load();
+        let (gl, gr) = (gl * s, gr * s);
         let target = if paused || flushing { 0.0 } else { 1.0 };
         for (i, out) in data.chunks_exact_mut(ch).enumerate() {
             self.fade = approach(self.fade, target, self.fade_step);
@@ -770,5 +774,21 @@ mod tests {
         assert!((left[240] - 0.25).abs() < 0.005, "mid-ramp {}", left[240]);
         assert!((left[480] - 0.5).abs() < 1e-6, "frame 480 {}", left[480]);
         assert!(left.windows(2).all(|w| w[1] >= w[0]));
+    }
+
+    #[test]
+    fn fill_scales_by_sleep_gain() {
+        let shared = Arc::new(Shared::new(1.0, 0.0));
+        let (mut ring, _tap, mut st) = callback(&shared, 4096, 64);
+        warm_up(&mut st);
+        shared.sleep_gain.store(0.5);
+        push(&mut ring, &[(0.5, 0.5); 600]);
+
+        let mut out = [0.0f32; 600 * 2];
+        st.fill(&mut out);
+
+        let left: Vec<f32> = out.iter().step_by(2).copied().collect();
+        assert!((left[0] - 0.5).abs() < 5e-3, "frame 0 {}", left[0]);
+        assert!((left[480] - 0.25).abs() < 1e-3, "frame 480 {}", left[480]);
     }
 }

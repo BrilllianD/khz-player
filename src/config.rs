@@ -64,6 +64,8 @@ pub struct Config {
     pub animation_fps: u32,
     /// Announce the next track to the engine so it starts without a gap.
     pub gapless: bool,
+    /// Sleep timer length in minutes (Ctrl+S).
+    pub sleep_minutes: u32,
     pub eq: EqConfig,
     pub window: WindowConfig,
 }
@@ -91,6 +93,7 @@ impl Default for Config {
             follow_omarchy_theme: true,
             animation_fps: 30,
             gapless: true,
+            sleep_minutes: 30,
             eq: EqConfig::default(),
             window: WindowConfig::default(),
         }
@@ -176,6 +179,7 @@ impl Config {
         self.volume = in_range(self.volume, 0.0, 1.0, d.volume);
         self.balance = in_range(self.balance, -1.0, 1.0, 0.0);
         self.animation_fps = self.animation_fps.clamp(10, 60);
+        self.sleep_minutes = self.sleep_minutes.clamp(1, 480);
         let max = crate::eq_presets::MAX_DB;
         self.eq.preamp = in_range(self.eq.preamp, -max, max, 0.0);
         for b in &mut self.eq.bands {
@@ -253,6 +257,7 @@ mod tests {
         assert!(c.eq.enabled);
         assert!(c.show_playlist);
         assert!(c.gapless);
+        assert_eq!(c.sleep_minutes, 30);
     }
 
     #[test]
@@ -276,7 +281,7 @@ mod tests {
         let path = dir.join("config.toml");
         std::fs::write(
             &path,
-            "volume = 3.0\nbalance = -7.0\nanimation_fps = 500\n[eq]\npreamp = 40.0\nbands = [-50,0,0,0,0,0,0,0,0,nan]\n",
+            "volume = 3.0\nbalance = -7.0\nanimation_fps = 500\nsleep_minutes = 9999\n[eq]\npreamp = 40.0\nbands = [-50,0,0,0,0,0,0,0,0,nan]\n",
         )
         .unwrap();
         let (c, err) = Config::load_from(&path);
@@ -284,9 +289,17 @@ mod tests {
         assert_eq!(c.volume, 1.0);
         assert_eq!(c.balance, -1.0);
         assert_eq!(c.animation_fps, 60);
+        assert_eq!(c.sleep_minutes, 480);
         assert_eq!(c.eq.preamp, 12.0);
         assert_eq!(c.eq.bands[0], -12.0);
         assert_eq!(c.eq.bands[9], 0.0);
+    }
+
+    #[test]
+    fn sleep_minutes_zero_clamps_to_one() {
+        let mut c: Config = toml::from_str("sleep_minutes = 0\n").unwrap();
+        c.clamp();
+        assert_eq!(c.sleep_minutes, 1);
     }
 
     #[test]

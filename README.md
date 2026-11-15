@@ -9,7 +9,7 @@ A Winamp-classic style music player for Linux, written in Rust.
   remembers the preset chosen for each track.
 - Several playlists, stored in SQLite; M3U import and export; a play queue (Q).
 - Media library scanned from your music folders, with a search box.
-- Gapless playback; MP3 (and MP1/MP2), FLAC, Ogg Vorbis, AAC and ALAC in
+- Gapless playback (can be turned off); MP3 (and MP1/MP2), FLAC, Ogg Vorbis, AAC and ALAC in
   M4A/MP4, WAV and AIFF. Opus, WavPack, APE and Musepack are not supported.
 - MPRIS, so media keys and desktop widgets can control it.
 - Uses the current Omarchy theme colors and follows theme switches;
@@ -98,6 +98,8 @@ newer glibc.
 | `Del` | Remove selected tracks |
 | `Ctrl+A` | Select all |
 | `Ctrl+T` | Switch elapsed / remaining time |
+| `Ctrl+V` | Stop after the current track (toggle) |
+| `Ctrl+S` | Start / cancel the sleep timer (fades out over 10 s, then pauses) |
 | `Alt+G` / `Alt+E` / `Alt+L` | Show or hide equalizer / playlist / library |
 
 Clicking the playlist gives it keyboard focus (its border turns the accent
@@ -141,7 +143,7 @@ Useful keys in `config.toml`:
   uses the Winamp colours.
 
 `Ctrl+P` (or the gear in the title bar) opens the settings window. It has four
-sections: Library (library folders, rescan), Playback, Audio, and Appearance (theme,
+sections: Library (library folders, rescan), Playback (gapless, sleep timer), Audio, and Appearance (theme,
 animation frame rate, remaining-time display, font file).
 
 ## Hyprland

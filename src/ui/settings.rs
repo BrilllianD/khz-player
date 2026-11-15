@@ -116,6 +116,27 @@ fn playback(app: &mut App, ui: &mut egui::Ui) {
         app.mark_cfg();
         app.refresh_prefetch();
     }
+    let mut toggle = false;
+    ui.horizontal(|ui| {
+        ui.label("Sleep timer");
+        let mut m = app.cfg.sleep_minutes;
+        if ui
+            .add(egui::DragValue::new(&mut m).range(1..=480).suffix(" min"))
+            .changed()
+        {
+            app.cfg.sleep_minutes = m;
+            app.mark_cfg();
+        }
+        let label = if app.sleep_running() { "Cancel" } else { "Start" };
+        toggle = ui.button(label).clicked();
+    });
+    ui.label(
+        RichText::new("Ctrl+S starts or cancels. Fades out over 10 s, then pauses.")
+            .color(app.theme.text_dim),
+    );
+    if toggle {
+        app.toggle_sleep();
+    }
 }
 
 fn audio(app: &mut App, ui: &mut egui::Ui) {

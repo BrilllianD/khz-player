@@ -81,6 +81,9 @@ pub struct App {
     pub state: PlayerState,
     /// Decoder info of the loaded track.
     pub now: Option<TrackInfo>,
+    /// Stop when the current track ends; cleared when it fires.
+    stop_after: bool,
+    sleep: playback::Sleep,
     /// Tag info of the loaded track (for the marquee).
     pub now_track: Option<Track>,
     track_counter: u64,
@@ -212,6 +215,8 @@ impl App {
             spectrum,
             state: PlayerState::Stopped,
             now: None,
+            stop_after: false,
+            sleep: playback::Sleep::Off,
             now_track: None,
             track_counter: 0,
             seek_drag: None,
@@ -370,6 +375,8 @@ impl App {
             }
             Action::RemoveSelected => self.remove_selected(),
             Action::EnqueueSelected => self.enqueue_selected(),
+            Action::StopAfterCurrent => self.toggle_stop_after(),
+            Action::SleepTimer => self.toggle_sleep(),
             Action::PlaySelected => {
                 let pl = &self.playlists[self.active];
                 let row = pl
@@ -405,6 +412,7 @@ impl eframe::App for App {
 
         self.handle_audio_events();
         self.handle_output_loss(now);
+        self.handle_sleep(now);
         self.handle_scan_events();
         self.handle_add_events();
         self.handle_dialog();
