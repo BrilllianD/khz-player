@@ -2,18 +2,18 @@
 //! applies EQ, taps the spectrum, applies volume/balance and writes the device buffer.
 //! No locks, no allocation in the steady state, no logging.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, anyhow};
+use anyhow::{anyhow, Context};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{
-    BufferSize, FromSample, I24, SampleFormat, SizedSample, StreamConfig, SupportedBufferSize,
-    SupportedStreamConfig, SupportedStreamConfigRange, U24,
+    BufferSize, FromSample, SampleFormat, SizedSample, StreamConfig, SupportedBufferSize,
+    SupportedStreamConfig, SupportedStreamConfigRange, I24, U24,
 };
 
-use crate::audio::dsp::{Equalizer, approach, channel_gains, soft_clip};
+use crate::audio::dsp::{approach, channel_gains, soft_clip, Equalizer};
 use crate::audio::shared::Shared;
 
 /// Ring capacity in seconds of stereo audio.
@@ -270,27 +270,34 @@ where
     T: SizedSample + FromSample<f32> + Send + 'static,
 {
     let shared = st.shared.clone();
+    let retired = st.retired.clone();
     device.build_output_stream::<T, _, _>(
         config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| st.fill(data),
-        move |e| match e.kind() {
-            // Xruns can come in bursts; count them and let the engine log the total.
-            cpal::ErrorKind::Xrun => {
-                shared.xruns.fetch_add(1, Ordering::Relaxed);
+        move |e| {
+            // A leaked stream changes no shared state.
+            if retired.load(Ordering::Acquire) {
+                return;
             }
-            // The stream keeps running: no realtime priority, or rerouted
-            // to a new default device.
-            cpal::ErrorKind::RealtimeDenied | cpal::ErrorKind::DeviceChanged => {
-                tracing::info!("audio stream: {e}");
-            }
-            // Anything else may have stopped the stream (device unplugged,
-            // sound server restarted); the UI reopens the output.
-            _ => {
-                if shared.device_lost.swap(true, Ordering::AcqRel) {
-                    tracing::debug!("audio stream error: {e}");
-                } else {
-                    tracing::warn!("audio stream error: {e}");
-                    repaint.request_repaint();
+            match e.kind() {
+                // Xruns can come in bursts; count them and let the engine log the total.
+                cpal::ErrorKind::Xrun => {
+                    shared.xruns.fetch_add(1, Ordering::Relaxed);
+                }
+                // The stream keeps running: no realtime priority, or rerouted
+                // to a new default device.
+                cpal::ErrorKind::RealtimeDenied | cpal::ErrorKind::DeviceChanged => {
+                    tracing::info!("audio stream: {e}");
+                }
+                // Anything else may have stopped the stream (device unplugged,
+                // sound server restarted); the UI reopens the output.
+                _ => {
+                    if shared.device_lost.swap(true, Ordering::AcqRel) {
+                        tracing::debug!("audio stream error: {e}");
+                    } else {
+                        tracing::warn!("audio stream error: {e}");
+                        repaint.request_repaint();
+                    }
                 }
             }
         },
@@ -490,10 +497,9 @@ mod tests {
         let default = range(2, 8000, 192000, SampleFormat::DsdU16).with_sample_rate(44100);
         let got = attempt_list(&[], &default);
         assert_eq!(got.len(), 2);
-        assert!(
-            got.iter()
-                .all(|(f, c)| *f == SampleFormat::F32 && c.channels == 2 && c.sample_rate == 44100)
-        );
+        assert!(got
+            .iter()
+            .all(|(f, c)| *f == SampleFormat::F32 && c.channels == 2 && c.sample_rate == 44100));
         assert_eq!(got[1].1.buffer_size, BufferSize::Default);
     }
 
@@ -508,7 +514,10 @@ mod tests {
     ) -> (rtrb::Producer<f32>, rtrb::Consumer<f32>, CallbackState) {
         let (ring_tx, ring_rx) = rtrb::RingBuffer::<f32>::new(ring_len);
         let (tap_tx, tap_rx) = rtrb::RingBuffer::<f32>::new(tap_len);
-        let st = CallbackState::new(shared.clone(), ring_rx, tap_tx,
+        let st = CallbackState::new(
+            shared.clone(),
+            ring_rx,
+            tap_tx,
             RATE,
             2,
             Arc::new(AtomicBool::new(false)),
@@ -570,7 +579,11 @@ mod tests {
 
         for i in 0..512 {
             let want = tone(256 + i) * (1.0 - (i + 1) as f32 / 288.0).max(0.0);
-            assert!((out[i * 2] - want).abs() < 1e-3, "frame {i}: {} vs {want}", out[i * 2]);
+            assert!(
+                (out[i * 2] - want).abs() < 1e-3,
+                "frame {i}: {} vs {want}",
+                out[i * 2]
+            );
         }
         assert!(out[288 * 2..].iter().all(|&s| s == 0.0));
         assert!(!shared.flush.load(Ordering::Acquire));
