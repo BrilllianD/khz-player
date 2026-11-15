@@ -87,7 +87,7 @@ src/
   ui/info_dialog.rs  File info modal (Alt+3, row menus) over a cloned Track; second CoverTexture
   ui/library_panel.rs search, rescan + progress, Artist > Album > Track tree, add to playlist
   ui/jump_dialog.rs  J: filter current playlist, Enter plays
-  ui/settings.rs     Ctrl+P Modal: section list (Library + clear cover cache, Playback, Audio + output device, Appearance + show cover + visualization), one fn per section
+  ui/settings.rs     Ctrl+P Modal: section list (Library + clear cover cache, Playback, Audio + output device, Appearance + show cover + visualization + double size), one fn per section
 ```
 
 ## Threading
@@ -151,6 +151,7 @@ Playlist 560×fill min 200 (toggle Alt+E / PL): tabs [Default][Rock][+]; ScrollA
 Library SidePanel::right 420 (Alt+L): search, rescan + ProgressBar, Artist > Album > Track tree
 ```
 Viewport: `with_inner_size([560,760]).with_min_inner_size([560,206]).with_decorations(false).with_app_id("khz-player")`. Resize on panel toggle via `ViewportCommand::InnerSize` (floating only). Layout fluid so tiled also works. Document Hyprland float rule for user.
+Double size (Ctrl+D): `set_zoom_factor(2.0)`; sizes saved in 1x points; `main.rs` multiplies the creation sizes; keyboard zoom off.
 
 Stock egui: Slider (seek/vol/bal/`Slider::vertical()` EQ), Button, SelectableLabel, ComboBox, ScrollArea, CollapsingHeader, TextEdit, menu_button, ProgressBar. Custom paint via `allocate_painter`: digits (seven-segment, dim unlit segments), marquee (clipped galley, 40 px/s), spectrum bars (gradient lo→hi, 2px peak line), LED toggles. Style: `Visuals::dark()` + overrides, `CornerRadius::ZERO`, tight spacing → flat Winamp look.
 
@@ -166,7 +167,7 @@ Omarchy mapping: bg=background, bg_dark=dark_background, bg_darker=darker_backgr
 Watch parent `~/.local/state/omarchy/current/` NonRecursive (symlink swapped atomically); re-resolve path on each reload.
 
 ### Shortcuts (only when `!ctx.wants_keyboard_input()`)
-Z prev, X play, C pause, V stop, B next, Space toggle, L add files (file dialog), J jump dialog, Left/Right ±5 s, Up/Down vol ±2% when the playlist is not focused (while focused: Up/Down cursor, Shift extends, PgUp/PgDn page, Home/End ends, Ctrl+Up/Down reorder selected; `PLAYLIST_BINDINGS`, consumed first; focus is set by a primary press in the CentralPanel), R repeat cycle Off/All/One, S shuffle, Alt+G EQ, Alt+E playlist, Alt+L library, Alt+3 file info, Delete remove selected, Enter play the cursor row (or first selected), Ctrl+A select all, Ctrl+T elapsed/remaining time, Ctrl+V stop after current (bound on release: egui-winit turns the press into Paste), Ctrl+S sleep timer.
+Z prev, X play, C pause, V stop, B next, Space toggle, L add files (file dialog), J jump dialog, Left/Right ±5 s, Up/Down vol ±2% when the playlist is not focused (while focused: Up/Down cursor, Shift extends, PgUp/PgDn page, Home/End ends, Ctrl+Up/Down reorder selected; `PLAYLIST_BINDINGS`, consumed first; focus is set by a primary press in the CentralPanel), R repeat cycle Off/All/One, S shuffle, Alt+G EQ, Alt+E playlist, Alt+L library, Alt+3 file info, Delete remove selected, Enter play the cursor row (or first selected), Ctrl+A select all, Ctrl+T elapsed/remaining time, Ctrl+V stop after current (bound on release: egui-winit turns the press into Paste), Ctrl+S sleep timer, Ctrl+D double size.
 
 ## Persistence
 

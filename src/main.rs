@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use khz_player::{app, config, mpris, ui};
+use khz_player::{app, config, mpris};
 use tracing_subscriber::EnvFilter;
 
 fn main() -> eframe::Result {
@@ -22,7 +22,7 @@ fn main() -> eframe::Result {
     }
     config::migrate_legacy_dirs();
     let (cfg, cfg_error) = config::Config::load();
-    let size = app::window_size(&cfg);
+    let (size, min) = app::initial_viewport(&cfg);
     // X11 shows this; Wayland compositors take the icon from the desktop file.
     let icon = eframe::icon_data::from_png_bytes(include_bytes!(
         "../assets/icons/dark/png/khz-icon-dark-256.png"
@@ -35,7 +35,7 @@ fn main() -> eframe::Result {
             .with_app_id("khz-player")
             .with_icon(Arc::new(icon))
             .with_inner_size(size)
-            .with_min_inner_size([ui::MAIN_W, ui::MAIN_H])
+            .with_min_inner_size(min)
             .with_decorations(false)
             .with_drag_and_drop(true),
         persist_window: false,

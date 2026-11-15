@@ -269,6 +269,9 @@ fn appearance(app: &mut App, ui: &mut egui::Ui) {
     if ui.checkbox(&mut follow, "Follow Omarchy theme").changed() {
         app.set_follow_theme(follow);
     }
+    if ui.checkbox(&mut app.cfg.double_size, "Double size (Ctrl+D)").changed() {
+        app.mark_cfg();
+    }
     ui.horizontal(|ui| {
         ui.label("Animation frame rate");
         let mut fps = app.cfg.animation_fps;

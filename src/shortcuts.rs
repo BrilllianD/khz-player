@@ -36,6 +36,8 @@ pub enum Action {
     Settings,
     /// Elapsed / remaining time on the digits.
     ToggleTimeDisplay,
+    /// Ctrl+D: UI at double size (toggle).
+    ToggleDoubleSize,
     /// Move the playlist cursor; the bool extends the selection (Shift).
     Cursor(Move, bool),
     /// Move the selected block one row: -1 up, +1 down.
@@ -71,6 +73,7 @@ const BINDINGS: &[(Modifiers, Key, Action)] = &[
     (Modifiers::CTRL, Key::P, Action::Settings),
     (Modifiers::CTRL, Key::T, Action::ToggleTimeDisplay),
     (Modifiers::CTRL, Key::S, Action::SleepTimer),
+    (Modifiers::CTRL, Key::D, Action::ToggleDoubleSize),
 ];
 
 /// Matched on key release. egui-winit turns a Ctrl+V press into `Event::Paste`
@@ -209,6 +212,14 @@ mod tests {
         let c = Modifiers::CTRL;
         assert_eq!(press(false, c, Key::T), [Action::ToggleTimeDisplay]);
         assert_eq!(press(true, c, Key::T), [Action::ToggleTimeDisplay]);
+    }
+
+    #[test]
+    fn ctrl_d_toggles_double_size() {
+        let c = Modifiers::CTRL;
+        assert_eq!(press(false, c, Key::D), [Action::ToggleDoubleSize]);
+        assert_eq!(press(true, c, Key::D), [Action::ToggleDoubleSize]);
+        assert!(press(false, Modifiers::NONE, Key::D).is_empty());
     }
 
     #[test]

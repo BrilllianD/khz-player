@@ -107,6 +107,7 @@ newer glibc.
 | `Ctrl+T` | Switch elapsed / remaining time |
 | `Ctrl+V` | Stop after the current track (toggle) |
 | `Ctrl+S` | Start / cancel the sleep timer (fades out over 10 s, then pauses) |
+| `Ctrl+D` | Double size (toggle) |
 | `Alt+G` / `Alt+E` / `Alt+L` | Show or hide equalizer / playlist / library |
 | `Alt+3` | File info of the cursor track (or the playing one) |
 
@@ -152,7 +153,7 @@ Useful keys in `config.toml`:
 
 `Ctrl+P` (or the gear in the title bar) opens the settings window. It has four
 sections: Library (library folders, rescan, clear cover cache), Playback (gapless, sleep timer), Audio (ReplayGain, output device), and Appearance (theme,
-animation frame rate, remaining-time display, show cover, visualization, font file).
+animation frame rate, remaining-time display, show cover, visualization, double size, font file).
 
 ## Hyprland
 

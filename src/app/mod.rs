@@ -32,6 +32,8 @@ mod playlists;
 use persist::should_save;
 use playlists::{AddJob, AddRequest, AddTarget};
 
+pub const DOUBLE_ZOOM: f32 = 2.0;
+const ZOOM_SETTLE: Duration = Duration::from_millis(500);
 const TOAST_TIME: Duration = Duration::from_secs(5);
 
 /// Text prompt shown as a modal (no native file dialogs).
@@ -138,6 +140,8 @@ pub struct App {
     /// Rows that fit in the playlist view; written by the panel each frame.
     pub playlist_page_rows: usize,
     last_frame: Instant,
+    zoom_pending: bool,
+    zoom_settle: Option<Instant>,
 }
 
 pub fn window_size(cfg: &Config) -> egui::Vec2 {
@@ -155,6 +159,16 @@ pub fn window_size(cfg: &Config) -> egui::Vec2 {
     egui::vec2(w, h)
 }
 
+pub fn zoom(cfg: &Config) -> f32 {
+    if cfg.double_size { DOUBLE_ZOOM } else { 1.0 }
+}
+
+/// Creation size and minimum size, in physical-scale points (1x sizes times the zoom).
+pub fn initial_viewport(cfg: &Config) -> (egui::Vec2, egui::Vec2) {
+    let z = zoom(cfg);
+    (window_size(cfg) * z, egui::vec2(ui::MAIN_W, ui::MAIN_H) * z)
+}
+
 impl App {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
@@ -163,6 +177,8 @@ impl App {
         cfg_error: Option<String>,
     ) -> Self {
         let ctx = cc.egui_ctx.clone();
+        ctx.options_mut(|o| o.zoom_with_keyboard = false);
+        ctx.set_zoom_factor(zoom(&cfg));
         let nerd_font = fonts::install(&ctx, cfg.font_path.as_deref());
         let theme = if cfg.follow_omarchy_theme { Theme::load() } else { Theme::winamp() };
         theme.apply(&ctx);
@@ -261,6 +277,8 @@ impl App {
             playlist_focus: false,
             playlist_page_rows: 1,
             last_frame: Instant::now(),
+            zoom_pending: false,
+            zoom_settle: None,
         };
         app.push_eq();
         app.publish_replay_gain();
@@ -425,6 +443,10 @@ impl App {
                 self.cfg.time_remaining = !self.cfg.time_remaining;
                 self.mark_cfg();
             }
+            Action::ToggleDoubleSize => {
+                self.cfg.double_size = !self.cfg.double_size;
+                self.mark_cfg();
+            }
         }
     }
 
@@ -481,6 +503,16 @@ impl eframe::App for App {
         self.spectrum.update(dt, playing && self.cfg.visualization == Visualization::Bars);
 
         self.toasts.retain(|(_, t)| t.elapsed() < TOAST_TIME);
+        let want = zoom(&self.cfg);
+        if ctx.zoom_factor() != want {
+            ctx.set_zoom_factor(want);
+            self.zoom_pending = true;
+        } else if self.zoom_pending {
+            self.zoom_pending = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(ui::MAIN_W, ui::MAIN_H)));
+            self.resize_window(ctx);
+            self.zoom_settle = Some(now + ZOOM_SETTLE);
+        }
         self.remember_window(ctx);
         // Without a database playlists are never saved, so ignore their flag.
         if self.cfg_changed.is_none()
@@ -543,6 +575,16 @@ mod tests {
         assert!(!needs_rescan(&[t(5), t(6)]));
         assert!(needs_rescan(&[t(5), t(6), t(-1)]));
         assert!(!needs_rescan(&[t(0)]));
+    }
+
+    #[test]
+    fn initial_viewport_scales_only_when_double() {
+        let mut cfg = Config::default();
+        let base = (window_size(&cfg), egui::vec2(ui::MAIN_W, ui::MAIN_H));
+        assert_eq!(initial_viewport(&cfg), base);
+        cfg.double_size = true;
+        assert_eq!(initial_viewport(&cfg), (base.0 * 2.0, base.1 * 2.0));
+        assert_eq!(window_size(&cfg), base.0);
     }
 
     #[test]

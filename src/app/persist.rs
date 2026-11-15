@@ -48,6 +48,9 @@ impl App {
     }
 
     pub(super) fn remember_window(&mut self, ctx: &egui::Context) {
+        if self.zoom_pending || self.zoom_settle.is_some_and(|t| Instant::now() < t) {
+            return;
+        }
         let h = ctx.content_rect().height().round();
         // Tiled or squeezed heights would reopen a floating window with no room
         // for the playlist; window_size() clamps too, this keeps config sane.

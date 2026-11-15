@@ -112,6 +112,8 @@ pub struct Config {
     pub show_cover: bool,
     /// Spectrum row: bars, scope or off; click the row to cycle.
     pub visualization: Visualization,
+    /// UI at zoom 2.0 (Ctrl+D); window sizes stay saved at 1x.
+    pub double_size: bool,
     /// Output device as a cpal `DeviceId` string (`pulseaudio:<sink>`); None = system default.
     pub output_device: Option<String>,
     pub eq: EqConfig,
@@ -147,6 +149,7 @@ impl Default for Config {
             notify_track_change: false,
             show_cover: false,
             visualization: Visualization::Bars,
+            double_size: false,
             output_device: None,
             eq: EqConfig::default(),
             replaygain: ReplayGainConfig::default(),
@@ -337,8 +340,15 @@ mod tests {
         assert!(!c.notify_track_change);
         assert!(!c.show_cover);
         assert_eq!(c.visualization, Visualization::Bars);
+        assert!(!c.double_size);
         assert_eq!(c.output_device, None);
         assert_eq!(c.replaygain, ReplayGainConfig::default());
+    }
+
+    #[test]
+    fn double_size_loads() {
+        let c: Config = toml::from_str("double_size = true\n").unwrap();
+        assert!(c.double_size);
     }
 
     #[test]
