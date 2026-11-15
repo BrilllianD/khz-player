@@ -228,12 +228,15 @@ impl Engine {
     /// Discards everything buffered in the ring and waits for the callback to
     /// do it. Pending transitions are dropped: callers that keep the current
     /// decoder must announce them first. With the device lost no callback
-    /// runs, so nothing waits; the next stream acks the flag on its first call.
+    /// runs, so nothing waits (likewise while a reopen is in progress); the next
+    /// stream acks the flag on its first call.
     fn flush(&mut self) {
         self.buf.clear();
         self.buf_pos = 0;
         self.shared.flush.store(true, Ordering::Release);
-        if !self.shared.device_lost.load(Ordering::Acquire) {
+        if !self.shared.device_lost.load(Ordering::Acquire)
+            && !self.shared.reopening.load(Ordering::Acquire)
+        {
             let start = Instant::now();
             while self.shared.flush.load(Ordering::Acquire) && start.elapsed() < FLUSH_TIMEOUT {
                 std::thread::sleep(Duration::from_millis(1));
@@ -400,6 +403,8 @@ impl Engine {
     /// the new rate. The state is kept: paused stays paused. The prefetched
     /// decoder is dropped; the app announces the next track again.
     fn set_output(&mut self, ring: rtrb::Producer<f32>, rate: u32) {
+        // First: the seek below flushes and must wait for the new callback.
+        self.shared.reopening.store(false, Ordering::Release);
         // A pending gapless successor is already the current decoder and none
         // of it was heard yet: it starts from zero (`seek` announces it).
         let pos = if self.transitions.is_empty() {
@@ -603,6 +608,7 @@ impl Engine {
     fn check_stall(&mut self, now: Instant) {
         let armed = self.state == PlayerState::Playing
             && !self.shared.device_lost.load(Ordering::Acquire)
+            && !self.shared.reopening.load(Ordering::Acquire)
             && self.pushed_total > self.consumed();
         if self.stall.check(armed, self.consumed(), now)
             && !self.shared.device_lost.swap(true, Ordering::AcqRel)
@@ -989,6 +995,42 @@ mod tests {
         assert_eq!(e.last_path.as_ref(), Some(&b));
         assert_eq!(e.position(), Duration::ZERO);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn check_stall_ignores_old_ring_while_reopening() {
+        let dir = crate::config::test_dir("engine-stall-reopen");
+        let path = dir.join("t.wav");
+        crate::library::scanner::tests::write_wav(&path, 8000 * 2);
+        let (mut e, _events, _ring_rx) = test_engine();
+        e.load(path, true, ReplayGain::default());
+        e.fill();
+        let t0 = Instant::now();
+        e.shared.reopening.store(true, Ordering::Release);
+        e.set_state(PlayerState::Playing);
+        for t in [0, 2000, 4000] {
+            e.check_stall(ms(t0, t));
+        }
+        assert!(!e.shared.device_lost.load(Ordering::Acquire));
+
+        // The new stream reports an error before the engine takes its ring.
+        e.shared.device_lost.store(true, Ordering::Release);
+        let (ring, _new_rx) = rtrb::RingBuffer::new(44100 * 2 * 3 / 10);
+        e.handle(Command::SetOutput { ring, rate: 44100 });
+        assert!(!e.shared.reopening.load(Ordering::Acquire));
+        assert!(e.shared.device_lost.load(Ordering::Acquire));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn flush_returns_fast_while_reopening() {
+        let (mut e, _events, _ring) = test_engine();
+        e.shared.reopening.store(true, Ordering::Release);
+        e.shared.device_lost.store(false, Ordering::Release);
+        let t0 = Instant::now();
+        e.flush();
+        assert!(t0.elapsed() < Duration::from_millis(5), "{:?}", t0.elapsed());
+        assert!(e.shared.flush.load(Ordering::Acquire));
     }
 
     #[test]

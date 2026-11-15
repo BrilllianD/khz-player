@@ -57,6 +57,11 @@ pub struct Shared {
     /// The stream reported a fatal error (device gone, server restarted) or
     /// never opened. The engine stops waiting for flush acks; the UI reopens.
     pub device_lost: AtomicBool,
+    /// Set by `AudioHandle::reopen` from before `output::open` until the engine
+    /// takes the new ring (`SetOutput`). The stall watch and flush waits ignore
+    /// the old ring meanwhile, so `device_lost` is free to record an error of
+    /// the new stream.
+    pub reopening: AtomicBool,
 }
 
 impl Shared {
@@ -79,6 +84,7 @@ impl Shared {
             tap_overflow: AtomicU64::new(0),
             xruns: AtomicU64::new(0),
             device_lost: AtomicBool::new(false),
+            reopening: AtomicBool::new(false),
         }
     }
 

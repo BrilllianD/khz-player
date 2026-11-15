@@ -118,11 +118,19 @@ impl AudioHandle {
             output::retire(old);
         }
         self.tap = None;
-        // `device_lost` stays set while `open` runs: the engine still counts the
-        // old ring as unconsumed until `SetOutput` arrives, and the stall watch
-        // must not trip on that. A slow open would otherwise retire the new stream.
-        let p = output::open(self.shared.clone(), self.repaint.clone())?;
+        // `reopening` keeps the stall watch and flush waits off the old ring
+        // until `SetOutput` arrives, however long `open` takes. `device_lost`
+        // is cleared before `open`, so an error of the new stream stays set.
+        self.shared.reopening.store(true, Ordering::Release);
         self.shared.device_lost.store(false, Ordering::Release);
+        let p = match output::open(self.shared.clone(), self.repaint.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                self.shared.device_lost.store(true, Ordering::Release);
+                self.shared.reopening.store(false, Ordering::Release);
+                return Err(e);
+            }
+        };
         self._output = Some(p.output);
         self.tap = Some(p.tap);
         self.init_error = None;
