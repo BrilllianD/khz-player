@@ -1,7 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.3.1 — 2026-11-15
 
+Playback survives a PipeWire restart, seeking no longer clicks, and the
+playlist works from the keyboard.
+
+- Playback no longer goes silent for good after a PipeWire restart: when the
+  audio output stops taking sound for a second, the player reopens it and
+  carries on at the same position ("Audio output restored").
 - The cursor stays on a row after deleting tracks instead of vanishing (#108).
 - The playlist takes keyboard focus when clicked (its border turns the accent
   color): arrows move a cursor, `PgUp`/`PgDn` and `Home`/`End` jump, `Shift`
@@ -11,7 +17,8 @@
 - `Ctrl+T` switches the time display between elapsed and remaining.
 - Hovering over the seek bar shows the time under the pointer.
 - The playlist footer shows the count and length of the selected tracks.
-- Seeking and switching tracks by hand fade out and back in instead of clicking.
+- Seeking and switching tracks by hand fade out and back in instead of
+  clicking.
 
 ## 0.3.0 — 2026-10-14
 
