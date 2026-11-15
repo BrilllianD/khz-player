@@ -67,7 +67,7 @@ src/
   audio/resample.rs  rubato Fft wrapper, bypass when track rate == device rate
   audio/output.rs    cpal stream at device default rate; realtime callback: ring -> EQ -> vol/bal -> spectrum tap
   audio/dsp.rs       Biquad (RBJ peaking), Equalizer (10 bands x 2 ch, preamp, smoothing), volume/balance
-  audio/spectrum.rs  UI-side FFT: Hann, realfft 2048, 20 log bands, dB, fall-off + peak hold
+  audio/spectrum.rs  UI-side FFT: Hann, realfft 2048, 20 log bands, dB, fall-off + peak hold; FFT only in Bars mode; recent(n) for the scope
   eq_presets.rs      Winamp preset table, user presets TOML load/save
   library/mod.rs     Track struct, LibraryHandle
   library/db.rs      rusqlite open/migrate, tracks + playlists CRUD
@@ -81,13 +81,13 @@ src/
   shortcuts.rs       key map -> Action
   ui/mod.rs          layout root: main / eq / playlist stack, library SidePanel::right
   ui/main_panel.rs   title strip, digits, marquee, spectrum, kbps/kHz, seek, vol/bal, transport, toggles
-  ui/widgets.rs      custom painters: digits (seven-segment LCD), marquee, spectrum, led_toggle, winamp_button
+  ui/widgets.rs      custom painters: digits (seven-segment LCD), marquee, spectrum, scope, led_toggle, winamp_button
   ui/eq_panel.rs     ON/AUTO, preamp + 10 vertical sliders, presets ComboBox, save/delete preset
   ui/playlist_panel.rs tabs, list, ADD/REM/SEL/MISC/LIST menus, drag-drop, dbl-click
   ui/info_dialog.rs  File info modal (Alt+3, row menus) over a cloned Track; second CoverTexture
   ui/library_panel.rs search, rescan + progress, Artist > Album > Track tree, add to playlist
   ui/jump_dialog.rs  J: filter current playlist, Enter plays
-  ui/settings.rs     Ctrl+P Modal: section list (Library + clear cover cache, Playback, Audio + output device, Appearance + show cover), one fn per section
+  ui/settings.rs     Ctrl+P Modal: section list (Library + clear cover cache, Playback, Audio + output device, Appearance + show cover + visualization), one fn per section
 ```
 
 ## Threading
@@ -141,7 +141,7 @@ Drain tap into rolling 2048-sample buffer; Hann; realfft; 20 log bands 50 Hz–1
 Main 560×206 (always)
   title strip 560×20 "kHz" + [_][x]; drag -> ViewportCommand::StartDrag, close -> Close
   [digits 180×60 "-02:34"] [marquee 340×20 title]
-                           [spectrum 340×60, 20 bars]
+                           [spectrum 340×60, 20 bars | scope | off; click cycles]
   [kbps][kHz] [mono/stereo LED]  vol 220  bal 100
   [seek 540×12]
   [|<][>][||][■][>|] [open]   [shuffle][repeat] [EQ][PL]

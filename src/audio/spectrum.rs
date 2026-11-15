@@ -102,6 +102,12 @@ impl Spectrum {
 
     /// Advances the animation by `dt` seconds. `active` is false when nothing plays,
     /// in which case bars just decay.
+    /// Last `n` (at most N) mono samples, oldest first.
+    pub fn recent(&self, n: usize) -> impl Iterator<Item = f32> + '_ {
+        let n = n.min(N);
+        (0..n).map(move |i| self.history[(self.write + N - n + i) % N])
+    }
+
     pub fn update(&mut self, dt: f32, active: bool) {
         let mut target = [0.0f32; BARS];
         if active && self.fresh {
@@ -157,6 +163,20 @@ impl Spectrum {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recent_returns_latest_oldest_first() {
+        let mut s = Spectrum::new(48000);
+        let (mut tx, mut rx) = rtrb::RingBuffer::new(4096);
+        for i in 0..N + 3 {
+            tx.push(i as f32).unwrap();
+        }
+        s.feed(&mut rx);
+        let last: Vec<f32> = s.recent(3).collect();
+        let n = N as f32;
+        assert_eq!(last, vec![n + 0.0, n + 1.0, n + 2.0]);
+        assert_eq!(s.recent(10_000).count(), N);
+    }
 
     fn with_sine(freq: f32, amp: f32) -> Spectrum {
         let rate = 48000;

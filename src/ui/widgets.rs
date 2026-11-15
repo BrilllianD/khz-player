@@ -157,6 +157,34 @@ pub fn spectrum(ui: &mut Ui, rect: Rect, bars: &[f32; BARS], peaks: &[f32; BARS]
     }
 }
 
+/// Oscilloscope line of mono samples (-1..1) inside an LCD.
+pub fn scope(ui: &mut Ui, rect: Rect, samples: &[f32], theme: &Theme) {
+    lcd(ui, rect, theme);
+    let p = ui.painter().with_clip_rect(rect.shrink(1.0));
+    let inner = rect.shrink2(vec2(4.0, 3.0));
+    let c = inner.center().y;
+    p.line_segment(
+        [pos2(inner.left(), c), pos2(inner.right(), c)],
+        Stroke::new(1.0, theme.spectrum_lo.gamma_multiply(0.3)),
+    );
+    p.line(scope_points(inner, samples), Stroke::new(1.0, theme.spectrum_hi));
+}
+
+fn scope_points(inner: Rect, samples: &[f32]) -> Vec<Pos2> {
+    let c = inner.center().y;
+    if samples.is_empty() {
+        return vec![pos2(inner.left(), c), pos2(inner.right(), c)];
+    }
+    let w = inner.width().max(1.0) as usize;
+    (0..=w)
+        .map(|x| {
+            let s = samples[x * (samples.len() - 1) / w];
+            let px = inner.left() + inner.width() * x as f32 / w as f32;
+            pos2(px, c - s.clamp(-1.0, 1.0) * inner.height() / 2.0)
+        })
+        .collect()
+}
+
 /// Small LED-style toggle button.
 pub fn led_toggle(ui: &mut Ui, on: bool, label: &str, theme: &Theme) -> Response {
     let font = FontId::monospace(11.0);
@@ -238,6 +266,18 @@ pub fn small_label(ui: &Ui, pos: Pos2, align: Align2, text: &str, color: Color32
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scope_points_span_and_clamp() {
+        let inner = Rect::from_min_size(pos2(10.0, 5.0), vec2(100.0, 40.0));
+        let flat = scope_points(inner, &[]);
+        assert_eq!(flat.len(), 2);
+        assert!(flat.iter().all(|p| p.y == inner.center().y));
+        let pts = scope_points(inner, &[2.0, -2.0]);
+        assert_eq!(pts.first().unwrap().x, inner.left());
+        assert_eq!(pts.last().unwrap().x, inner.right());
+        assert!(pts.iter().all(|p| (inner.top()..=inner.bottom()).contains(&p.y)));
+    }
 
     #[test]
     fn segments_table() {

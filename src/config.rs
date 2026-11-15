@@ -39,6 +39,25 @@ pub enum ReplayGainMode {
     Auto,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Visualization {
+    #[default]
+    Bars,
+    Scope,
+    Off,
+}
+
+impl Visualization {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Bars => Self::Scope,
+            Self::Scope => Self::Off,
+            Self::Off => Self::Bars,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ReplayGainConfig {
@@ -91,6 +110,8 @@ pub struct Config {
     pub notify_track_change: bool,
     /// Cover of the current track at the right of the spectrum (Settings, Appearance).
     pub show_cover: bool,
+    /// Spectrum row: bars, scope or off; click the row to cycle.
+    pub visualization: Visualization,
     /// Output device as a cpal `DeviceId` string (`pulseaudio:<sink>`); None = system default.
     pub output_device: Option<String>,
     pub eq: EqConfig,
@@ -125,6 +146,7 @@ impl Default for Config {
             sleep_minutes: 30,
             notify_track_change: false,
             show_cover: false,
+            visualization: Visualization::Bars,
             output_device: None,
             eq: EqConfig::default(),
             replaygain: ReplayGainConfig::default(),
@@ -314,8 +336,17 @@ mod tests {
         assert_eq!(c.sleep_minutes, 30);
         assert!(!c.notify_track_change);
         assert!(!c.show_cover);
+        assert_eq!(c.visualization, Visualization::Bars);
         assert_eq!(c.output_device, None);
         assert_eq!(c.replaygain, ReplayGainConfig::default());
+    }
+
+    #[test]
+    fn visualization_loads_and_cycles() {
+        let c: Config = toml::from_str("visualization = \"scope\"\n").unwrap();
+        assert_eq!(c.visualization, Visualization::Scope);
+        assert_eq!(Visualization::Bars.next(), Visualization::Scope);
+        assert_eq!(Visualization::Bars.next().next().next(), Visualization::Bars);
     }
 
     #[test]

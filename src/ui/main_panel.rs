@@ -7,6 +7,7 @@ use egui::{Align2, FontId, Id, Rect, Sense, Ui, pos2, vec2};
 use super::widgets;
 use crate::app::App;
 use crate::audio::{Command, PlayerState};
+use crate::config::Visualization;
 use crate::dialog::Purpose;
 use crate::library::format_duration;
 use crate::shortcuts::Action;
@@ -147,7 +148,20 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     );
     let spec_r = Rect::from_min_max(pos2(right_x, marquee_r.bottom() + 4.0), pos2(x1, top + 76.0));
     let (spec_r, cover_r) = split_cover(spec_r, app.cfg.show_cover);
-    widgets::spectrum(ui, spec_r, &app.spectrum.bars, &app.spectrum.peaks, &theme);
+    if ui.allocate_rect(spec_r, Sense::click()).clicked() {
+        app.cycle_visualization();
+    }
+    match app.cfg.visualization {
+        Visualization::Bars => {
+            widgets::spectrum(ui, spec_r, &app.spectrum.bars, &app.spectrum.peaks, &theme);
+        }
+        Visualization::Scope => {
+            let s: Vec<f32> =
+                if playing { app.spectrum.recent(SCOPE_SAMPLES).collect() } else { Vec::new() };
+            widgets::scope(ui, spec_r, &s, &theme);
+        }
+        Visualization::Off => widgets::lcd(ui, spec_r, &theme),
+    }
     if let Some(r) = cover_r {
         draw_cover(ui, r, app.cover_tex.texture(), &theme);
     }
@@ -288,6 +302,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
 }
 
 const COVER_GAP: f32 = 4.0;
+const SCOPE_SAMPLES: usize = 1024;
 
 /// Cuts a square of the row height off the right end of `spec_r`.
 /// Returns the remaining spectrum rect and the cover rect.

@@ -4,7 +4,7 @@ A Winamp-classic style music player for Linux, written in Rust.
 
 ![khz-player with the equalizer and playlist open](assets/screenshots/khz-player.png)
 
-- Main window with time display, scrolling title, spectrum analyzer, volume and balance.
+- Main window with time display, scrolling title, spectrum analyzer or oscilloscope (click to switch, or off), volume and balance.
 - 10-band equalizer with presets (built-in and your own) and AUTO mode, which
   remembers the preset chosen for each track.
 - Several playlists, stored in SQLite; M3U import and export; a play queue (Q).
@@ -152,7 +152,7 @@ Useful keys in `config.toml`:
 
 `Ctrl+P` (or the gear in the title bar) opens the settings window. It has four
 sections: Library (library folders, rescan, clear cover cache), Playback (gapless, sleep timer), Audio (ReplayGain, output device), and Appearance (theme,
-animation frame rate, remaining-time display, show cover, font file).
+animation frame rate, remaining-time display, show cover, visualization, font file).
 
 ## Hyprland
 

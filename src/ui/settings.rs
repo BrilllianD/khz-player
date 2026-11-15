@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use egui::{Id, Modal, RichText};
 
 use crate::app::App;
+use crate::config::Visualization;
 use crate::dialog::Purpose;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -285,6 +286,17 @@ fn appearance(app: &mut App, ui: &mut egui::Ui) {
     if ui.checkbox(&mut app.cfg.show_cover, "Show cover").changed() {
         app.mark_cfg();
     }
+    ui.horizontal(|ui| {
+        ui.label("Visualization");
+        let mut v = app.cfg.visualization;
+        ui.selectable_value(&mut v, Visualization::Bars, "Bars");
+        ui.selectable_value(&mut v, Visualization::Scope, "Scope");
+        ui.selectable_value(&mut v, Visualization::Off, "Off");
+        if v != app.cfg.visualization {
+            app.cfg.visualization = v;
+            app.mark_cfg();
+        }
+    });
     ui.horizontal(|ui| {
         ui.label("Font file");
         ui.label(RichText::new("applies after restart").color(dim));

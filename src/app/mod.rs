@@ -7,7 +7,7 @@ use rusqlite::Connection;
 
 use crate::audio::spectrum::Spectrum;
 use crate::audio::{AudioHandle, Command, Event, PlayerState, TrackInfo};
-use crate::config::Config;
+use crate::config::{Config, Visualization};
 use crate::dialog::{self, Purpose};
 use crate::eq_presets::{self, Preset};
 use crate::library::adder::{self, AddEvent};
@@ -432,6 +432,11 @@ impl App {
         self.info = Some(t);
     }
 
+    pub fn cycle_visualization(&mut self) {
+        self.cfg.visualization = self.cfg.visualization.next();
+        self.mark_cfg();
+    }
+
     pub fn resize_window(&mut self, ctx: &egui::Context) {
         // Remember the playlist height so it comes back the same size.
         let size = window_size(&self.cfg);
@@ -473,7 +478,7 @@ impl eframe::App for App {
             self.spectrum.feed(tap);
         }
         let playing = self.state == PlayerState::Playing;
-        self.spectrum.update(dt, playing);
+        self.spectrum.update(dt, playing && self.cfg.visualization == Visualization::Bars);
 
         self.toasts.retain(|(_, t)| t.elapsed() < TOAST_TIME);
         self.remember_window(ctx);
