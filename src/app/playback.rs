@@ -59,6 +59,10 @@ impl App {
         if self.now.is_none() {
             return;
         }
+        if !self.cfg.gapless {
+            self.audio.send(Command::PrefetchNext(None));
+            return;
+        }
         let (repeat, shuffle) = (self.cfg.repeat, self.cfg.shuffle);
         let pl = self.playing();
         let next = pl

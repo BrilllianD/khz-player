@@ -62,6 +62,8 @@ pub struct Config {
     pub follow_omarchy_theme: bool,
     /// Repaint rate while playing (spectrum, marquee). Each frame costs CPU.
     pub animation_fps: u32,
+    /// Announce the next track to the engine so it starts without a gap.
+    pub gapless: bool,
     pub eq: EqConfig,
     pub window: WindowConfig,
 }
@@ -88,6 +90,7 @@ impl Default for Config {
             time_remaining: false,
             follow_omarchy_theme: true,
             animation_fps: 30,
+            gapless: true,
             eq: EqConfig::default(),
             window: WindowConfig::default(),
         }
@@ -249,6 +252,7 @@ mod tests {
         assert_eq!(c.volume, 0.3);
         assert!(c.eq.enabled);
         assert!(c.show_playlist);
+        assert!(c.gapless);
     }
 
     #[test]

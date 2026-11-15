@@ -112,7 +112,10 @@ fn library(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn playback(app: &mut App, ui: &mut egui::Ui) {
-    ui.label(RichText::new("No settings here yet.").color(app.theme.text_dim));
+    if ui.checkbox(&mut app.cfg.gapless, "Gapless playback").changed() {
+        app.mark_cfg();
+        app.refresh_prefetch();
+    }
 }
 
 fn audio(app: &mut App, ui: &mut egui::Ui) {
