@@ -2,3 +2,7 @@
 
 running slices 1-11 per outline
 
+## 2026-11-15T07:51:14Z — Bronnikov Aleksandr
+
+Slices 1-11 landed and reviewed (9 split into 9a/9b), main 0cacccd..04cbc8e, 235 tests. One fix wave (slice 10: Notify 2 s timeout). Slice plans, reports and reviews in ~/.claude/plans/khz-0.4.0/. Release 0.4.0 waits for the 14 manual checks in the outline. CHANGELOG notes: DB v6 (0.3.x refuses it), saved low volume plays quieter after the dB taper, egui keyboard zoom (Ctrl+Plus/Minus/0) is off.
+
