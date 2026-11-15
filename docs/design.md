@@ -126,7 +126,7 @@ A = 10^(g/40); w0 = 2πf0/fs; α = sin(w0)/(2Q)
 b0 = 1+αA   b1 = -2cos(w0)   b2 = 1-αA
 a0 = 1+α/A  a1 = -2cos(w0)   a2 = 1-α/A   (normalize by a0)
 ```
-Transposed DF2 per channel. Smoothing: every 64 frames `cur += (target-cur)*0.15`, recompute coeffs when `|Δ|>0.01`. Preamp linear, smoothed. Volume `v²`; balance `l = vol*min(1,1-bal)`, `r = vol*min(1,1+bal)`.
+Transposed DF2 per channel. Smoothing: every 64 frames `cur += (target-cur)*0.15`, recompute coeffs when `|Δ|>0.01`. Preamp linear, smoothed. Volume: 50 dB taper, `g = 10^(50(v-1)/20)`, 0 at `v = 0`; balance `l = vol*min(1,1-bal)`, `r = vol*min(1,1+bal)`.
 
 Presets: XMMS/Audacious Winamp table (±20 scale) × 0.6 → ±12: Classical, Club, Dance, Full Bass, Full Bass & Treble, Full Treble, Laptop Speakers/Headphones, Large Hall, Live, Party, Pop, Reggae, Rock, Ska, Soft, Soft Rock, Techno (values as in agent table, e.g. Rock `8 4.8 -5.6 -8 -3.2 4 8.8 11.2 11.2 11.2`). User presets → `~/.config/khz-player/eq_presets.toml` `[[preset]] name, preamp, bands=[..10]`.
 

@@ -218,10 +218,17 @@ impl Equalizer {
     }
 }
 
-/// Linear left/right gains from volume (0..1, squared law) and balance (-1..1).
+const VOLUME_RANGE_DB: f32 = 50.0;
+
+/// Linear left/right gains from volume (0..1 on a 50 dB taper, 0 is silent)
+/// and balance (-1..1).
 pub fn channel_gains(volume: f32, balance: f32) -> (f32, f32) {
     let v = volume.clamp(0.0, 1.0);
-    let v = v * v;
+    let v = if v <= 0.0 {
+        0.0
+    } else {
+        10f32.powf(VOLUME_RANGE_DB * (v - 1.0) / 20.0)
+    };
     let b = balance.clamp(-1.0, 1.0);
     (v * (1.0 - b).min(1.0), v * (1.0 + b).min(1.0))
 }
@@ -356,7 +363,17 @@ mod tests {
     #[test]
     fn gains() {
         assert_eq!(channel_gains(1.0, 0.0), (1.0, 1.0));
-        assert_eq!(channel_gains(0.5, 0.0), (0.25, 0.25));
+        let (l, r) = channel_gains(0.5, 0.0);
+        assert!((l - 0.056234).abs() < 1e-6 && l == r);
+        assert_eq!(channel_gains(0.0, 0.0), (0.0, 0.0));
+        assert_eq!(channel_gains(-0.1, 0.0), (0.0, 0.0));
+        assert_eq!(channel_gains(1.5, 0.0), (1.0, 1.0));
+        let mut prev = 0.0;
+        for i in 0..=100 {
+            let (l, _) = channel_gains(i as f32 / 100.0, 0.0);
+            assert!(l >= prev);
+            prev = l;
+        }
         assert_eq!(channel_gains(1.0, 1.0), (0.0, 1.0));
         assert_eq!(channel_gains(1.0, -0.5), (1.0, 0.5));
     }

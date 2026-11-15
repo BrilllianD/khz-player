@@ -793,4 +793,18 @@ mod tests {
         assert!((left[0] - 0.5).abs() < 5e-3, "frame 0 {}", left[0]);
         assert!((left[480] - 0.25).abs() < 1e-3, "frame 480 {}", left[480]);
     }
+
+    #[test]
+    fn fill_applies_db_taper() {
+        let shared = Arc::new(Shared::new(0.5, 0.0));
+        let (mut ring, _tap, mut st) = callback(&shared, 4096, 64);
+        warm_up(&mut st);
+        push(&mut ring, &[(0.5, 0.5); 600]);
+
+        let mut out = [0.0f32; 600 * 2];
+        st.fill(&mut out);
+
+        let want = 0.5 * 0.056234;
+        assert!((out[480 * 2] - want).abs() < 1e-4, "frame 480 {}", out[480 * 2]);
+    }
 }
