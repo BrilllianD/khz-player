@@ -343,17 +343,18 @@ impl CallbackState {
             data.fill(T::EQUILIBRIUM);
             return;
         }
-        let shared = &*self.shared;
+        // Cloned so `finish_flush` can borrow `self` mutably; no allocation.
+        let shared = Arc::clone(&self.shared);
+        let shared = &*shared;
         let ch = self.channels;
         let frames = data.len() / ch;
 
-        if shared.flush.load(Ordering::Acquire) {
-            let n = self.ring.slots();
-            if let Ok(chunk) = self.ring.read_chunk(n) {
-                chunk.commit_all();
-            }
-            self.fade = 0.0;
-            shared.flush.store(false, Ordering::Release);
+        // A flush ramps the old audio down first; the ring is cleared and the
+        // request acked only once the output is silent.
+        let mut flushing = shared.flush.load(Ordering::Acquire);
+        if flushing && self.fade <= 0.0 {
+            self.finish_flush();
+            flushing = false;
         }
 
         let paused = shared.paused.load(Ordering::Relaxed);
@@ -394,7 +395,7 @@ impl CallbackState {
         }
 
         let (gl, gr) = channel_gains(shared.volume.load(), shared.balance.load());
-        let target = if paused { 0.0 } else { 1.0 };
+        let target = if paused || flushing { 0.0 } else { 1.0 };
         for (i, out) in data.chunks_exact_mut(ch).enumerate() {
             self.fade = approach(self.fade, target, self.fade_step);
             self.gain.0 = approach(self.gain.0, gl, self.gain_step);
@@ -412,6 +413,20 @@ impl CallbackState {
                 }
             }
         }
+        if flushing && self.fade <= 0.0 {
+            self.finish_flush();
+        }
+    }
+
+    /// Drops the old audio and its filter history, then acks the flush request.
+    fn finish_flush(&mut self) {
+        let n = self.ring.slots();
+        if let Ok(chunk) = self.ring.read_chunk(n) {
+            chunk.commit_all();
+        }
+        self.fade = 0.0;
+        self.eq.reset();
+        self.shared.flush.store(false, Ordering::Release);
     }
 }
 
@@ -527,6 +542,77 @@ mod tests {
         assert!(!shared.flush.load(Ordering::Acquire));
         assert_eq!(ring.slots(), 1024, "ring still holds samples");
         assert_eq!(shared.consumed.load(Ordering::Acquire), 0);
+        assert!(out.iter().all(|&s| s == 0.0));
+    }
+
+    fn tone(n: usize) -> f32 {
+        0.5 * (2.0 * std::f32::consts::PI * 440.0 * n as f32 / RATE as f32).sin()
+    }
+
+    /// A playing callback with 4096 tone frames queued and 256 already played.
+    fn playing_tone(shared: &Arc<Shared>) -> (rtrb::Producer<f32>, CallbackState) {
+        let (mut ring, _tap, mut st) = callback(shared, 8192, 4096);
+        warm_up(&mut st);
+        let frames: Vec<(f32, f32)> = (0..4096).map(|n| (tone(n), tone(n))).collect();
+        push(&mut ring, &frames);
+        st.fill(&mut [0.0f32; 256 * 2]);
+        (ring, st)
+    }
+
+    #[test]
+    fn fill_flush_ramps_old_audio_down_before_ack() {
+        let shared = Arc::new(Shared::new(1.0, 0.0));
+        let (ring, mut st) = playing_tone(&shared);
+        shared.flush.store(true, Ordering::Release);
+
+        let mut out = [1.0f32; 512 * 2];
+        st.fill(&mut out);
+
+        for i in 0..512 {
+            let want = tone(256 + i) * (1.0 - (i + 1) as f32 / 288.0).max(0.0);
+            assert!((out[i * 2] - want).abs() < 1e-3, "frame {i}: {} vs {want}", out[i * 2]);
+        }
+        assert!(out[288 * 2..].iter().all(|&s| s == 0.0));
+        assert!(!shared.flush.load(Ordering::Acquire));
+        assert_eq!(ring.slots(), 8192, "ring not cleared");
+        assert_eq!(shared.consumed.load(Ordering::Acquire), 256 + 512);
+    }
+
+    #[test]
+    fn fill_flush_ramp_spans_small_buffers() {
+        let shared = Arc::new(Shared::new(1.0, 0.0));
+        let (_ring, mut st) = playing_tone(&shared);
+        shared.flush.store(true, Ordering::Release);
+
+        for call in 1..=5usize {
+            let mut out = [0.0f32; 64 * 2];
+            st.fill(&mut out);
+            let peak = out.iter().step_by(2).fold(0.0f32, |m, s| m.max(s.abs()));
+            let envelope = 1.0 - ((call - 1) * 64) as f32 / 288.0;
+            assert!(peak <= envelope * 0.5 + 1e-3, "call {call}: peak {peak}");
+            assert_eq!(
+                shared.flush.load(Ordering::Acquire),
+                call < 5,
+                "flush state after call {call}"
+            );
+        }
+    }
+
+    #[test]
+    fn fill_flush_while_paused_acks_at_once() {
+        let shared = Arc::new(Shared::new(1.0, 0.0));
+        let (mut ring, _tap, mut st) = callback(&shared, 1024, 64);
+        warm_up(&mut st);
+        shared.paused.store(true, Ordering::Relaxed);
+        st.fill(&mut [0.0f32; 512 * 2]);
+        push(&mut ring, &[(0.5, 0.5); 100]);
+        shared.flush.store(true, Ordering::Release);
+
+        let mut out = [1.0f32; 64 * 2];
+        st.fill(&mut out);
+
+        assert!(!shared.flush.load(Ordering::Acquire));
+        assert_eq!(ring.slots(), 1024);
         assert!(out.iter().all(|&s| s == 0.0));
     }
 

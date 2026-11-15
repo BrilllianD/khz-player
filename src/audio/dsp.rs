@@ -138,6 +138,14 @@ impl Equalizer {
         }
     }
 
+    /// Drops the filter history, e.g. after the ring was flushed. Gains stay.
+    pub fn reset(&mut self) {
+        for f in &mut self.filters {
+            f.z1 = [0.0; 2];
+            f.z2 = [0.0; 2];
+        }
+    }
+
     /// Disabling ramps every band to 0 dB, so toggling never clicks.
     fn targets(p: &EqParams) -> ([f32; BANDS], f32) {
         if p.enabled {
@@ -324,6 +332,25 @@ mod tests {
         }
         assert!(eq.cur_db.iter().all(|&g| g == 12.0));
         assert!(state(&eq).iter().all(|&z| z == 0.0), "{:?}", state(&eq));
+    }
+
+    #[test]
+    fn eq_reset_clears_state_keeps_gains() {
+        let mut eq = Equalizer::new(48000.0);
+        let p = EqParams {
+            enabled: true,
+            preamp_db: 0.0,
+            bands_db: [12.0; BANDS],
+        };
+        let mut buf = vec![0.0f32; 24000 * 2];
+        for (i, s) in buf.iter_mut().enumerate() {
+            *s = ((i / 2) as f32 * 0.05).sin() * 0.5;
+        }
+        eq.process(&mut buf, &p);
+        assert!(eq.filters.iter().any(|f| f.z1.iter().any(|&z| z != 0.0)));
+        eq.reset();
+        assert!(eq.filters.iter().all(|f| f.z1 == [0.0; 2] && f.z2 == [0.0; 2]));
+        assert!(eq.cur_db.iter().all(|&g| g == 12.0));
     }
 
     #[test]

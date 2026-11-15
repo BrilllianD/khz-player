@@ -108,7 +108,7 @@ pub enum Event { Loaded(TrackInfo), StateChanged(PlayerState), TrackEnded, Error
 ```
 - Position read by UI from `position_frames / out_rate` each frame (no events).
 - States: Stopped / Playing / Paused. Pause = stop pushing; callback outputs silence when ring empty, stream never paused.
-- Seek: `reader.seek(SeekMode::Accurate, SeekTo::Time{..})`, `decoder.reset()`, resampler reset, set `flush` flag, wait (<=100 ms) for callback to drain ring, set `position_frames`, discard frames until `required_ts`.
+- Seek: `reader.seek(SeekMode::Accurate, SeekTo::Time{..})`, `decoder.reset()`, resampler reset, set `flush` flag, wait (<=120 ms) for callback to drain ring, set `position_frames`, discard frames until `required_ts`.
 - Gapless: `PrefetchNext` opens next decoder in advance; on EOF swap decoders without flush; send `TrackEnded` + `Loaded(next)`.
 - symphonia 0.6 API: `probe(&hint, mss, fmt_opts, meta_opts)`, `default_track(TrackType::Audio)`, `codec_params.audio()`, `make_audio_decoder`, `next_packet -> Result<Option<Packet>>`, `decode -> GenericAudioBufferRef`, `copy_to_vec_interleaved`. `enable_gapless: true`.
 - cpal 0.18 API: `default_output_config()` (expect 48000), force 2 ch, `BufferSize::Fixed(1024)` with Default fallback, request f32 else iterate `supported_output_configs`; `build_output_stream(config, cb, err, None)`, `stream.start()`.

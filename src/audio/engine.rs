@@ -14,7 +14,8 @@ use crate::audio::shared::Shared;
 use crate::audio::{Command, Event, PlayerState};
 
 const IDLE_WAIT: Duration = Duration::from_millis(5);
-const FLUSH_TIMEOUT: Duration = Duration::from_millis(100);
+/// The ack comes after up to one device period plus the 6 ms flush fade-out.
+const FLUSH_TIMEOUT: Duration = Duration::from_millis(120);
 const XRUN_LOG_INTERVAL: Duration = Duration::from_secs(10);
 /// How long `consumed` may stand still, with frames in the ring while
 /// playing, before the output counts as lost.
