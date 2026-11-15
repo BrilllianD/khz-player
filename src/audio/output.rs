@@ -20,7 +20,7 @@ use crate::audio::shared::Shared;
 const RING_SECONDS: f32 = 0.3;
 pub const TAP_CAPACITY: usize = 8192;
 /// Pause/resume fade length.
-const FADE_SECONDS: f32 = 0.006;
+const FADE_SECONDS: f32 = 0.020;
 /// Time for the volume/balance gain to travel the full 0..1 range.
 const GAIN_RAMP_SECONDS: f32 = 0.010;
 
@@ -532,9 +532,9 @@ mod tests {
         }
     }
 
-    /// Runs the callback over an empty ring long enough for the 6 ms fade-in to finish.
+    /// Runs the callback over an empty ring long enough for the fade-in to finish.
     fn warm_up(st: &mut CallbackState) {
-        st.fill(&mut [0.0f32; 1024]);
+        st.fill(&mut [0.0f32; 2048 * 2]);
         assert_eq!(st.fade, 1.0);
     }
 
@@ -553,6 +553,9 @@ mod tests {
         assert_eq!(shared.consumed.load(Ordering::Acquire), 0);
         assert!(out.iter().all(|&s| s == 0.0));
     }
+
+    /// Frames in one fade ramp at the test rate.
+    const FADE_FRAMES: usize = (RATE as f32 * FADE_SECONDS) as usize;
 
     fn tone(n: usize) -> f32 {
         0.5 * (2.0 * std::f32::consts::PI * 440.0 * n as f32 / RATE as f32).sin()
@@ -574,21 +577,22 @@ mod tests {
         let (ring, mut st) = playing_tone(&shared);
         shared.flush.store(true, Ordering::Release);
 
-        let mut out = [1.0f32; 512 * 2];
+        let frames = FADE_FRAMES + 224;
+        let mut out = vec![1.0f32; frames * 2];
         st.fill(&mut out);
 
-        for i in 0..512 {
-            let want = tone(256 + i) * (1.0 - (i + 1) as f32 / 288.0).max(0.0);
+        for i in 0..frames {
+            let want = tone(256 + i) * (1.0 - (i + 1) as f32 / FADE_FRAMES as f32).max(0.0);
             assert!(
                 (out[i * 2] - want).abs() < 1e-3,
                 "frame {i}: {} vs {want}",
                 out[i * 2]
             );
         }
-        assert!(out[288 * 2..].iter().all(|&s| s == 0.0));
+        assert!(out[FADE_FRAMES * 2..].iter().all(|&s| s == 0.0));
         assert!(!shared.flush.load(Ordering::Acquire));
         assert_eq!(ring.slots(), 8192, "ring not cleared");
-        assert_eq!(shared.consumed.load(Ordering::Acquire), 256 + 512);
+        assert_eq!(shared.consumed.load(Ordering::Acquire), 256 + frames as u64);
     }
 
     #[test]
@@ -597,15 +601,16 @@ mod tests {
         let (_ring, mut st) = playing_tone(&shared);
         shared.flush.store(true, Ordering::Release);
 
-        for call in 1..=5usize {
+        let calls = FADE_FRAMES.div_ceil(64) + 1;
+        for call in 1..=calls {
             let mut out = [0.0f32; 64 * 2];
             st.fill(&mut out);
             let peak = out.iter().step_by(2).fold(0.0f32, |m, s| m.max(s.abs()));
-            let envelope = 1.0 - ((call - 1) * 64) as f32 / 288.0;
+            let envelope = 1.0 - ((call - 1) * 64) as f32 / FADE_FRAMES as f32;
             assert!(peak <= envelope * 0.5 + 1e-3, "call {call}: peak {peak}");
             assert_eq!(
                 shared.flush.load(Ordering::Acquire),
-                call < 5,
+                call < calls,
                 "flush state after call {call}"
             );
         }
@@ -617,7 +622,7 @@ mod tests {
         let (mut ring, _tap, mut st) = callback(&shared, 1024, 64);
         warm_up(&mut st);
         shared.paused.store(true, Ordering::Relaxed);
-        st.fill(&mut [0.0f32; 512 * 2]);
+        st.fill(&mut vec![0.0f32; (FADE_FRAMES + 64) * 2]);
         push(&mut ring, &[(0.5, 0.5); 100]);
         shared.flush.store(true, Ordering::Release);
 

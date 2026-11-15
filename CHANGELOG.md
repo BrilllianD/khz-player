@@ -11,6 +11,7 @@
 - `Ctrl+T` switches the time display between elapsed and remaining.
 - Hovering over the seek bar shows the time under the pointer.
 - The playlist footer shows the count and length of the selected tracks.
+- Seeking and switching tracks by hand fade out and back in instead of clicking.
 
 ## 0.3.0 — 2026-10-14
 
