@@ -166,7 +166,7 @@ impl App {
         theme.apply(&ctx);
         let theme_watch = theme_watch::start(ctx.clone());
 
-        let audio = AudioHandle::start(cfg.volume, cfg.balance, ctx.clone());
+        let audio = AudioHandle::start(cfg.volume, cfg.balance, cfg.output_device.as_deref(), ctx.clone());
         let spectrum = Spectrum::new(audio.shared.out_rate());
 
         let db = match db::open(&db::default_path()) {
@@ -269,6 +269,9 @@ impl App {
         if let Some(e) = app.audio.init_error.clone() {
             app.toast(format!("Audio output unavailable: {e}"));
             app.reopen_failing = true;
+        }
+        if app.audio.device_fallback {
+            app.toast(events::DEVICE_FALLBACK_MSG);
         }
 
         if !args.is_empty() {

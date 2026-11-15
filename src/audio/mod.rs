@@ -66,20 +66,28 @@ pub struct AudioHandle {
     pub shared: Arc<Shared>,
     pub tap: Option<rtrb::Consumer<f32>>,
     pub init_error: Option<String>,
+    /// The configured device was not found and the default is in use.
+    pub device_fallback: bool,
     _output: Option<output::Output>,
     repaint: egui::Context,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl AudioHandle {
-    pub fn start(volume: f32, balance: f32, repaint: egui::Context) -> Self {
+    pub fn start(
+        volume: f32,
+        balance: f32,
+        device: Option<&str>,
+        repaint: egui::Context,
+    ) -> Self {
         let shared = Arc::new(Shared::new(volume, balance));
         let (tx, rx) = crossbeam_channel::unbounded();
         let (ev_tx, ev_rx) = crossbeam_channel::unbounded();
-        let (ring, tap, out, init_error) = match output::open(shared.clone(), repaint.clone()) {
+        let opened = output::open(shared.clone(), repaint.clone(), device);
+        let (ring, tap, out, init_error, device_fallback) = match opened {
             Ok(p) => {
                 shared.out_rate.store(p.rate, Ordering::Relaxed);
-                (p.ring, Some(p.tap), Some(p.output), None)
+                (p.ring, Some(p.tap), Some(p.output), None, p.fell_back)
             }
             Err(e) => {
                 tracing::error!("audio output unavailable: {e:#}");
@@ -87,7 +95,7 @@ impl AudioHandle {
                 // still work; flushes must not wait for a callback that never runs.
                 shared.device_lost.store(true, Ordering::Release);
                 let (ring, _) = rtrb::RingBuffer::new(2);
-                (ring, None, None, Some(format!("{e:#}")))
+                (ring, None, None, Some(format!("{e:#}")), false)
             }
         };
         let (eng_shared, eng_repaint) = (shared.clone(), repaint.clone());
@@ -101,15 +109,16 @@ impl AudioHandle {
             shared,
             tap,
             init_error,
+            device_fallback,
             _output: out,
             repaint,
             thread: Some(thread),
         }
     }
 
-    /// Opens the default output again after a device loss or a failed start
+    /// Opens `device`, or the default, again after a device loss or a failed start
     /// and hands the new ring to the engine. Returns the new output rate.
-    pub fn reopen(&mut self) -> anyhow::Result<u32> {
+    pub fn reopen(&mut self, device: Option<&str>) -> anyhow::Result<u32> {
         // Close the old stream first: a device that is still there may not
         // allow a second stream, and its callback must stop counting `consumed`
         // before the engine resyncs to the new ring.
@@ -123,7 +132,7 @@ impl AudioHandle {
         // is cleared before `open`, so an error of the new stream stays set.
         self.shared.reopening.store(true, Ordering::Release);
         self.shared.device_lost.store(false, Ordering::Release);
-        let p = match output::open(self.shared.clone(), self.repaint.clone()) {
+        let p = match output::open(self.shared.clone(), self.repaint.clone(), device) {
             Ok(p) => p,
             Err(e) => {
                 self.shared.device_lost.store(true, Ordering::Release);
@@ -134,6 +143,7 @@ impl AudioHandle {
         self._output = Some(p.output);
         self.tap = Some(p.tap);
         self.init_error = None;
+        self.device_fallback = p.fell_back;
         self.send(Command::SetOutput {
             ring: p.ring,
             rate: p.rate,

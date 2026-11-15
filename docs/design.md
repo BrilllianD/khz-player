@@ -86,7 +86,7 @@ src/
   ui/playlist_panel.rs tabs, list, ADD/REM/SEL/MISC/LIST menus, drag-drop, dbl-click
   ui/library_panel.rs search, rescan + progress, Artist > Album > Track tree, add to playlist
   ui/jump_dialog.rs  J: filter current playlist, Enter plays
-  ui/settings.rs     Ctrl+P Modal: section list (Library + clear cover cache, Playback, Audio, Appearance + show cover), one fn per section
+  ui/settings.rs     Ctrl+P Modal: section list (Library + clear cover cache, Playback, Audio + output device, Appearance + show cover), one fn per section
 ```
 
 ## Threading
@@ -117,7 +117,7 @@ pub enum Event { Loaded(TrackInfo), StateChanged(PlayerState), TrackEnded, Error
 - Gapless: `PrefetchNext` opens next decoder in advance; on EOF swap decoders without flush; send `TrackEnded` + `Loaded(next)`.
 - symphonia 0.6 API: `probe(&hint, mss, fmt_opts, meta_opts)`, `default_track(TrackType::Audio)`, `codec_params.audio()`, `make_audio_decoder`, `next_packet -> Result<Option<Packet>>`, `decode -> GenericAudioBufferRef`, `copy_to_vec_interleaved`. `enable_gapless: true`.
 - cpal 0.18 API: `default_output_config()` (expect 48000), force 2 ch, `BufferSize::Fixed(1024)` with Default fallback, request f32 else iterate `supported_output_configs`; `build_output_stream(config, cb, err, None)`, `stream.start()`.
-- cpal host: `cpal::default_host()` (PulseAudio via the pure-Rust `pulseaudio` crate, ALSA fallback; init timeout 2 s, so `reopen` can block the UI for up to 2 s while the server is gone). The host is logged on every open.
+- cpal host: `cpal::default_host()` (PulseAudio via the pure-Rust `pulseaudio` crate, ALSA fallback; init timeout 2 s, so `reopen` can block the UI for up to 2 s while the server is gone). The host is logged on every open. `output_device` (`DeviceId` string) is resolved against `output_devices()` of the current host on every open; an unknown id or one of another host opens the default with a warning and a toast. A settings change reopens through `App::switch_output`, which uses the loss loop's `reopen_output`.
 - rubato 5: `Fft::<f32>::new(in_rate, out_rate, 1024, 2, FixedSync::Input)` with interleaved adapters; accumulate 1024-frame input chunks; reset on seek. Fallback: reopen stream at track rate.
 
 ### EQ (`audio/dsp.rs`)

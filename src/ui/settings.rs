@@ -27,6 +27,10 @@ fn font_id() -> Id {
     Id::new("settings-font")
 }
 
+fn devices_id() -> Id {
+    Id::new("settings-devices")
+}
+
 pub fn show(app: &mut App, ctx: &egui::Context) {
     if !app.settings_open {
         return;
@@ -68,7 +72,10 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     ctx.data_mut(|d| d.insert_temp(section_id, section));
     if close || resp.should_close() {
         app.settings_open = false;
-        ctx.data_mut(|d| d.remove::<String>(font_id()));
+        ctx.data_mut(|d| {
+            d.remove::<String>(font_id());
+            d.remove::<Vec<(String, String)>>(devices_id());
+        });
     }
 }
 
@@ -202,6 +209,46 @@ fn audio(app: &mut App, ui: &mut egui::Ui) {
         }
     });
     ui.label(RichText::new("Peaks are never clipped.").color(app.theme.text_dim));
+    ui.separator();
+    // Listing makes a new sound-server client: once per settings session, not per frame.
+    let cached = ui
+        .ctx()
+        .data_mut(|d| d.get_temp::<Vec<(String, String)>>(devices_id()));
+    let devices = cached.unwrap_or_else(|| {
+        let list = crate::audio::output::list_devices();
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(devices_id(), list.clone()));
+        list
+    });
+    let mut sel = app.cfg.output_device.clone();
+    ui.horizontal(|ui| {
+        ui.label("Output device");
+        let shown = match &sel {
+            None => "System default".to_owned(),
+            Some(id) => devices
+                .iter()
+                .find(|(i, _)| i == id)
+                .map(|(_, desc)| desc.clone())
+                .unwrap_or_else(|| format!("{id} (not available)")),
+        };
+        egui::ComboBox::from_id_salt("output-device")
+            .selected_text(shown)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut sel, None, "System default");
+                for (id, desc) in &devices {
+                    ui.selectable_value(&mut sel, Some(id.clone()), desc);
+                }
+            });
+        if ui.small_button("Refresh").clicked() {
+            ui.ctx()
+                .data_mut(|d| d.remove::<Vec<(String, String)>>(devices_id()));
+        }
+    });
+    if sel != app.cfg.output_device {
+        app.cfg.output_device = sel;
+        app.mark_cfg();
+        app.switch_output();
+    }
 }
 
 fn appearance(app: &mut App, ui: &mut egui::Ui) {

@@ -12,6 +12,7 @@ A Winamp-classic style music player for Linux, written in Rust.
 - Gapless playback (can be turned off); MP3 (and MP1/MP2), FLAC, Ogg Vorbis, AAC and ALAC in
   M4A/MP4, WAV and AIFF. Opus, WavPack, APE and Musepack are not supported.
 - ReplayGain (track, album or auto) with preamp and a gain for untagged tracks; peaks are never clipped.
+- Output device choice (Settings, Audio): any PulseAudio sink, or the system default.
 - MPRIS, so media keys and desktop widgets can control it, with cover art.
 - Optional cover of the current track in the main window (off by default).
 - Uses the current Omarchy theme colors and follows theme switches;
@@ -148,7 +149,7 @@ Useful keys in `config.toml`:
   uses the Winamp colours.
 
 `Ctrl+P` (or the gear in the title bar) opens the settings window. It has four
-sections: Library (library folders, rescan, clear cover cache), Playback (gapless, sleep timer), Audio (ReplayGain), and Appearance (theme,
+sections: Library (library folders, rescan, clear cover cache), Playback (gapless, sleep timer), Audio (ReplayGain, output device), and Appearance (theme,
 animation frame rate, remaining-time display, show cover, font file).
 
 ## Hyprland

@@ -91,6 +91,8 @@ pub struct Config {
     pub notify_track_change: bool,
     /// Cover of the current track at the right of the spectrum (Settings, Appearance).
     pub show_cover: bool,
+    /// Output device as a cpal `DeviceId` string (`pulseaudio:<sink>`); None = system default.
+    pub output_device: Option<String>,
     pub eq: EqConfig,
     /// Loudness normalisation from the file tags (Settings, Audio).
     pub replaygain: ReplayGainConfig,
@@ -123,6 +125,7 @@ impl Default for Config {
             sleep_minutes: 30,
             notify_track_change: false,
             show_cover: false,
+            output_device: None,
             eq: EqConfig::default(),
             replaygain: ReplayGainConfig::default(),
             window: WindowConfig::default(),
@@ -210,6 +213,7 @@ impl Config {
         self.balance = in_range(self.balance, -1.0, 1.0, 0.0);
         self.animation_fps = self.animation_fps.clamp(10, 60);
         self.sleep_minutes = self.sleep_minutes.clamp(1, 480);
+        self.output_device = self.output_device.take().filter(|s| !s.trim().is_empty());
         let max = crate::eq_presets::MAX_DB;
         self.eq.preamp = in_range(self.eq.preamp, -max, max, 0.0);
         for b in &mut self.eq.bands {
@@ -270,10 +274,28 @@ mod tests {
         let mut c = Config::default();
         c.eq.bands[3] = 4.5;
         c.repeat = Repeat::One;
+        c.output_device = Some("pulseaudio:alsa_output.x".into());
         let s = toml::to_string_pretty(&c).unwrap();
         let back: Config = toml::from_str(&s).unwrap();
         assert_eq!(back.eq.bands[3], 4.5);
         assert_eq!(back.repeat, Repeat::One);
+        assert_eq!(
+            back.output_device.as_deref(),
+            Some("pulseaudio:alsa_output.x")
+        );
+    }
+
+    #[test]
+    fn output_device_empty_loads_as_none() {
+        let dir = test_dir("config-output-device");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "output_device = \"\"\n").unwrap();
+        let (c, err) = Config::load_from(&path);
+        assert!(err.is_none());
+        assert_eq!(c.output_device, None);
+        std::fs::write(&path, "output_device = \"pulseaudio:x\"\n").unwrap();
+        let (c, _) = Config::load_from(&path);
+        assert_eq!(c.output_device.as_deref(), Some("pulseaudio:x"));
     }
 
     #[test]
@@ -292,6 +314,7 @@ mod tests {
         assert_eq!(c.sleep_minutes, 30);
         assert!(!c.notify_track_change);
         assert!(!c.show_cover);
+        assert_eq!(c.output_device, None);
         assert_eq!(c.replaygain, ReplayGainConfig::default());
     }
 

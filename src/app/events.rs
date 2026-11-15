@@ -4,6 +4,7 @@ use crate::ui::playlist_panel::ScrollMode;
 
 /// Minimum time between attempts to reopen a lost audio output.
 const REOPEN_INTERVAL: Duration = Duration::from_secs(2);
+pub(super) const DEVICE_FALLBACK_MSG: &str = "Output device not found, using the system default";
 
 impl App {
     pub(super) fn handle_audio_events(&mut self) {
@@ -75,13 +76,22 @@ impl App {
         {
             return;
         }
+        self.reopen_output(now, false);
+    }
+
+    /// Reopens the output on `cfg.output_device`. `manual`: asked for in the settings, not a loss.
+    fn reopen_output(&mut self, now: Instant, manual: bool) {
         self.last_reopen = Some(now);
-        match self.audio.reopen() {
+        match self.audio.reopen(self.cfg.output_device.as_deref()) {
             Ok(rate) => {
-                self.reopen_failing = false;
+                let was_failing = std::mem::take(&mut self.reopen_failing);
                 self.spectrum = Spectrum::new(rate);
                 self.refresh_prefetch();
-                self.toast("Audio output restored");
+                if self.audio.device_fallback {
+                    self.toast(DEVICE_FALLBACK_MSG);
+                } else if !manual || was_failing {
+                    self.toast("Audio output restored");
+                }
             }
             Err(e) => {
                 tracing::debug!("reopen audio output: {e:#}");
@@ -91,6 +101,11 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Moves playback to `cfg.output_device`; the caller has already written it.
+    pub fn switch_output(&mut self) {
+        self.reopen_output(Instant::now(), true);
     }
 
     /// Moves on from a track that could not be loaded, unless every track of

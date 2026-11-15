@@ -41,19 +41,78 @@ pub struct OutputParts {
     pub tap: rtrb::Consumer<f32>,
     /// Output sample rate of the stream.
     pub rate: u32,
+    /// `device` was asked for and not found: the default device is used.
+    pub fell_back: bool,
 }
 
-/// Opens the default output device of `cpal::default_host()` (PulseAudio when
-/// a server answers, else ALSA). Does not touch `shared.out_rate`: the
+/// `wanted` as a device id of `host`; None when it does not parse or names another host.
+fn wanted_id(wanted: &str, host: cpal::HostId) -> Option<cpal::DeviceId> {
+    wanted
+        .parse::<cpal::DeviceId>()
+        .ok()
+        .filter(|id| id.host() == host)
+}
+
+/// The output device `wanted` names on `host`, else the default one; the flag
+/// is true when `wanted` was given and not used.
+fn pick_device(host: &cpal::Host, wanted: Option<&str>) -> (Option<cpal::Device>, bool) {
+    let Some(w) = wanted else {
+        return (host.default_output_device(), false);
+    };
+    let found = wanted_id(w, host.id()).and_then(|id| {
+        host.output_devices()
+            .ok()?
+            .find(|d| d.id().ok().as_ref() == Some(&id))
+    });
+    match found {
+        Some(dev) => (Some(dev), false),
+        None => {
+            tracing::warn!(
+                "output device {w} not found on host {}; using the default",
+                host.id()
+            );
+            (host.default_output_device(), true)
+        }
+    }
+}
+
+/// `(id, description)` of the output devices of `cpal::default_host()`, in host order.
+pub fn list_devices() -> Vec<(String, String)> {
+    let host = cpal::default_host();
+    let devices = match host.output_devices() {
+        Ok(it) => it,
+        Err(e) => {
+            tracing::debug!("list output devices: {e}");
+            return Vec::new();
+        }
+    };
+    devices
+        .filter_map(|d| {
+            let id = d.id().ok()?.to_string();
+            let desc = d
+                .description()
+                .map(|x| x.name().to_owned())
+                .unwrap_or_else(|_| id.clone());
+            Some((id, desc))
+        })
+        .collect()
+}
+
+/// Opens output device `device` of `cpal::default_host()` (PulseAudio when
+/// a server answers, else ALSA), or the default device when `device` is None
+/// or not found. Does not touch `shared.out_rate`: the
 /// caller hands `rate` to the engine together with `ring`, so position and
 /// rate change at the same moment. `repaint` wakes the UI when the stream
 /// fails for good.
-pub fn open(shared: Arc<Shared>, repaint: egui::Context) -> anyhow::Result<OutputParts> {
+pub fn open(
+    shared: Arc<Shared>,
+    repaint: egui::Context,
+    device: Option<&str>,
+) -> anyhow::Result<OutputParts> {
     let host = cpal::default_host();
     let host_id = host.id();
-    let device = host
-        .default_output_device()
-        .ok_or_else(|| anyhow!("no default output device (host {host_id})"))?;
+    let (picked, fell_back) = pick_device(&host, device);
+    let device = picked.ok_or_else(|| anyhow!("no default output device (host {host_id})"))?;
     let device_name = device.to_string();
     let default = device
         .default_output_config()
@@ -111,6 +170,7 @@ pub fn open(shared: Arc<Shared>, repaint: egui::Context) -> anyhow::Result<Outpu
             ring: ring_tx,
             tap: tap_rx,
             rate,
+            fell_back,
         });
     }
     Err(anyhow!(
@@ -450,6 +510,29 @@ mod tests {
 
     use crate::audio::dsp::EqParams;
     use crate::config::BANDS;
+
+    #[test]
+    fn wanted_id_pulse_on_pulse() {
+        let id = wanted_id("pulseaudio:alsa_output.x", cpal::HostId::PulseAudio).unwrap();
+        assert_eq!(id.id(), "alsa_output.x");
+    }
+
+    #[test]
+    fn wanted_id_other_host_is_none() {
+        assert!(wanted_id("pulseaudio:alsa_output.x", cpal::HostId::Alsa).is_none());
+    }
+
+    #[test]
+    fn wanted_id_alsa_keeps_colon_in_name() {
+        let id = wanted_id("alsa:hw:0,0", cpal::HostId::Alsa).unwrap();
+        assert_eq!(id.id(), "hw:0,0");
+    }
+
+    #[test]
+    fn wanted_id_unparsable_is_none() {
+        assert!(wanted_id("nocolon", cpal::HostId::Alsa).is_none());
+        assert!(wanted_id("nosuchhost:x", cpal::HostId::Alsa).is_none());
+    }
 
     fn range(
         channels: u16,
