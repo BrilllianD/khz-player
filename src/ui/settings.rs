@@ -77,6 +77,7 @@ fn library(app: &mut App, ui: &mut egui::Ui) {
     let mut remove: Option<usize> = None;
     let mut add_folder = false;
     let mut rescan = false;
+    let mut clear_covers = false;
 
     ui.label(RichText::new("Library folders").strong());
     for (i, root) in app.cfg.library_roots.iter().enumerate() {
@@ -97,6 +98,9 @@ fn library(app: &mut App, ui: &mut egui::Ui) {
         {
             rescan = true;
         }
+        if ui.button("Clear cover cache").clicked() {
+            clear_covers = true;
+        }
     });
 
     if let Some(i) = remove {
@@ -108,6 +112,12 @@ fn library(app: &mut App, ui: &mut egui::Ui) {
     }
     if rescan {
         app.rescan();
+    }
+    if clear_covers {
+        match crate::library::art::clear_cache() {
+            Ok(()) => app.toast("Cover cache cleared"),
+            Err(e) => app.toast(format!("Clear cover cache: {e}")),
+        }
     }
 }
 
@@ -223,6 +233,9 @@ fn appearance(app: &mut App, ui: &mut egui::Ui) {
         .checkbox(&mut app.cfg.time_remaining, "Show remaining time")
         .changed()
     {
+        app.mark_cfg();
+    }
+    if ui.checkbox(&mut app.cfg.show_cover, "Show cover").changed() {
         app.mark_cfg();
     }
     ui.horizontal(|ui| {

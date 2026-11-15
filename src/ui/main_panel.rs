@@ -146,7 +146,11 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         &theme,
     );
     let spec_r = Rect::from_min_max(pos2(right_x, marquee_r.bottom() + 4.0), pos2(x1, top + 76.0));
+    let (spec_r, cover_r) = split_cover(spec_r, app.cfg.show_cover);
     widgets::spectrum(ui, spec_r, &app.spectrum.bars, &app.spectrum.peaks, &theme);
+    if let Some(r) = cover_r {
+        draw_cover(ui, r, app.cover_tex.texture(), &theme);
+    }
 
     // --- volume / balance / panel toggles ----------------------------------
     let row_y = top + 84.0;
@@ -283,6 +287,34 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     }
 }
 
+const COVER_GAP: f32 = 4.0;
+
+/// Cuts a square of the row height off the right end of `spec_r`.
+/// Returns the remaining spectrum rect and the cover rect.
+fn split_cover(spec_r: Rect, show: bool) -> (Rect, Option<Rect>) {
+    let h = spec_r.height();
+    if !show || spec_r.width() < 3.0 * h {
+        return (spec_r, None);
+    }
+    let cover = Rect::from_min_max(pos2(spec_r.right() - h, spec_r.top()), spec_r.right_bottom());
+    let spec = Rect::from_min_max(spec_r.min, pos2(cover.left() - COVER_GAP, spec_r.bottom()));
+    (spec, Some(cover))
+}
+
+fn draw_cover(ui: &Ui, r: Rect, tex: Option<&egui::TextureHandle>, theme: &crate::theme::Theme) {
+    ui.painter().rect_filled(r, 0.0, theme.bg_darker);
+    if let Some(tex) = tex {
+        let s = tex.size_vec2();
+        let k = (r.width() / s.x).min(r.height() / s.y);
+        ui.painter().image(
+            tex.id(),
+            Rect::from_center_size(r.center(), s * k),
+            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+    }
+}
+
 fn title_button(ui: &mut Ui, rect: Rect, text: &str, theme: &crate::theme::Theme) -> egui::Response {
     let resp = ui.interact(rect, Id::new(("title-btn", text)), Sense::click());
     let p = ui.painter();
@@ -337,6 +369,20 @@ fn wheel_notches(i: &egui::InputState) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_cover_takes_square_at_right() {
+        let r = Rect::from_min_max(pos2(10.0, 20.0), pos2(310.0, 72.0));
+        let (spec, cover) = split_cover(r, true);
+        let cover = cover.unwrap();
+        assert_eq!(cover.size(), vec2(52.0, 52.0));
+        assert_eq!(cover.right(), r.right());
+        assert_eq!(spec.right(), cover.left() - COVER_GAP);
+        assert_eq!(spec.left(), r.left());
+        assert_eq!(split_cover(r, false), (r, None));
+        let narrow = Rect::from_min_max(pos2(10.0, 20.0), pos2(110.0, 72.0));
+        assert_eq!(split_cover(narrow, true), (narrow, None));
+    }
 
     #[test]
     fn seek_time_at_maps_fraction() {

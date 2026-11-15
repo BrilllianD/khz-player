@@ -89,6 +89,7 @@ pub struct App {
     track_counter: u64,
     /// Cover of the current track (C7); None until its lookup answers.
     pub cover: Option<PathBuf>,
+    pub cover_tex: crate::ui::cover::CoverTexture,
     cover_tx: crossbeam_channel::Sender<(u64, PathBuf, Option<PathBuf>)>,
     cover_rx: Receiver<(u64, PathBuf, Option<PathBuf>)>,
     /// While dragging the seek bar: fraction 0..1.
@@ -225,6 +226,7 @@ impl App {
             now_track: None,
             track_counter: 0,
             cover: None,
+            cover_tex: crate::ui::cover::CoverTexture::new("cover"),
             cover_tx,
             cover_rx,
             seek_drag: None,
@@ -422,6 +424,8 @@ impl eframe::App for App {
 
         self.handle_audio_events();
         self.handle_cover_events();
+        let want = if self.cfg.show_cover { self.cover.clone() } else { None };
+        self.cover_tex.sync(ctx, want.as_deref());
         self.handle_output_loss(now);
         self.handle_sleep(now);
         self.handle_scan_events();

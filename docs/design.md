@@ -74,6 +74,7 @@ src/
   library/scanner.rs background thread: walkdir, mtime/size compare, lofty, batched inserts, progress
   library/tags.rs    lofty -> Track (title fallback = file stem)
   library/art.rs     cover lookup: embedded front/first picture (cached by hash) or cover/folder/front.jpg|png; cache ~/.cache/khz-player/art
+  ui/cover.rs        image decode (jpeg/png, <=256 px) off the UI thread, CoverTexture
   playlist.rs        in-memory Playlist (Vec<Track>, cursor, shuffle order, repeat, play queue (session only)), next/prev
   m3u.rs             parse/write M3U/M3U8 (#EXTM3U/#EXTINF, relative paths)
   mpris.rs           thread: mpris-server Player, zbus::block_on, Command sender + async_channel updates, desktop notification on track change (org.freedesktop.Notifications)
@@ -85,7 +86,7 @@ src/
   ui/playlist_panel.rs tabs, list, ADD/REM/SEL/MISC/LIST menus, drag-drop, dbl-click
   ui/library_panel.rs search, rescan + progress, Artist > Album > Track tree, add to playlist
   ui/jump_dialog.rs  J: filter current playlist, Enter plays
-  ui/settings.rs     Ctrl+P Modal: section list (Library, Playback, Audio, Appearance), one fn per section
+  ui/settings.rs     Ctrl+P Modal: section list (Library + clear cover cache, Playback, Audio, Appearance + show cover), one fn per section
 ```
 
 ## Threading

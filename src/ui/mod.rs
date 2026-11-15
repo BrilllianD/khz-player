@@ -1,3 +1,4 @@
+pub mod cover;
 pub mod eq_panel;
 pub mod jump_dialog;
 pub mod library_panel;

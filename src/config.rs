@@ -89,6 +89,8 @@ pub struct Config {
     pub sleep_minutes: u32,
     /// Desktop notification on each started track while the window is unfocused.
     pub notify_track_change: bool,
+    /// Cover of the current track at the right of the spectrum (Settings, Appearance).
+    pub show_cover: bool,
     pub eq: EqConfig,
     /// Loudness normalisation from the file tags (Settings, Audio).
     pub replaygain: ReplayGainConfig,
@@ -120,6 +122,7 @@ impl Default for Config {
             gapless: true,
             sleep_minutes: 30,
             notify_track_change: false,
+            show_cover: false,
             eq: EqConfig::default(),
             replaygain: ReplayGainConfig::default(),
             window: WindowConfig::default(),
@@ -288,7 +291,14 @@ mod tests {
         assert!(c.gapless);
         assert_eq!(c.sleep_minutes, 30);
         assert!(!c.notify_track_change);
+        assert!(!c.show_cover);
         assert_eq!(c.replaygain, ReplayGainConfig::default());
+    }
+
+    #[test]
+    fn show_cover_loads() {
+        let c: Config = toml::from_str("show_cover = true\n").unwrap();
+        assert!(c.show_cover);
     }
 
     #[test]
