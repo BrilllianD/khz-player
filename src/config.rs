@@ -205,22 +205,50 @@ impl Config {
         config_dir().join("config.toml")
     }
 
-    /// Loads the config, or defaults plus an error message for the user when
-    /// the file could not be parsed.
+    /// Loads the config: defaults or partial values, plus a message for the
+    /// user when the file could not be read or held bad values.
     pub fn load() -> (Self, Option<String>) {
         Self::load_from(&Self::path())
     }
 
+    /// Config for a load that failed: no library folders, so the scanner does
+    /// not fall back to `~/Music` and prune the library against it.
+    fn no_roots() -> Self {
+        Config { library_roots: Vec::new(), ..Default::default() }
+    }
+
     pub fn load_from(path: &Path) -> (Self, Option<String>) {
         let (mut cfg, err) = match std::fs::read_to_string(path) {
-            Ok(s) => match toml::from_str(&s) {
+            Ok(s) => match toml::from_str::<Config>(&s) {
                 Ok(c) => (c, None),
-                Err(e) => (Self::default(), Some(set_aside(path, &e))),
+                Err(e) => Self::load_partial(path, &s, e),
             },
-            Err(_) => (Self::default(), None),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Self::default(), None),
+            Err(e) => (Self::no_roots(), Some(set_aside(path, &e))),
         };
         cfg.clamp();
         (cfg, err)
+    }
+
+    /// Whole-struct parse failed: keep every key that is valid on its own.
+    fn load_partial(path: &Path, text: &str, e: toml::de::Error) -> (Self, Option<String>) {
+        let whole = |e: &dyn std::fmt::Display| (Self::no_roots(), Some(set_aside(path, e)));
+        let Ok(mut t) = text.parse::<toml::Table>() else { return whole(&e) };
+        let bad = drop_bad_keys(&mut t);
+        if bad.is_empty() {
+            return whole(&e);
+        }
+        let roots_read = t.contains_key("library_roots");
+        match t.try_into::<Config>() {
+            Ok(mut c) => {
+                if !roots_read {
+                    c.library_roots.clear();
+                }
+                let msg = format!("invalid value for {}, other settings kept", bad.join(", "));
+                (c, Some(set_aside(path, &msg)))
+            }
+            Err(e2) => whole(&e2),
+        }
     }
 
     pub fn save(&self) -> anyhow::Result<()> {
@@ -250,6 +278,42 @@ impl Config {
             *v = v.filter(|x| x.is_finite() && *x > 0.0);
         }
     }
+}
+
+/// Removes the keys that do not deserialize on their own and returns their
+/// dotted names, so one bad value does not reset every setting.
+fn drop_bad_keys(table: &mut toml::Table) -> Vec<String> {
+    fn ok(k: &str, v: &toml::Value) -> bool {
+        let mut t = toml::Table::new();
+        t.insert(k.to_owned(), v.clone());
+        t.try_into::<Config>().is_ok()
+    }
+    let mut bad = Vec::new();
+    let keys: Vec<String> = table.keys().cloned().collect();
+    for k in keys {
+        let v = table[&k].clone();
+        if ok(&k, &v) {
+            continue;
+        }
+        if let toml::Value::Table(mut sub) = v {
+            let subkeys: Vec<String> = sub.keys().cloned().collect();
+            for sk in subkeys {
+                let mut one = toml::Table::new();
+                one.insert(sk.clone(), sub[&sk].clone());
+                if !ok(&k, &toml::Value::Table(one)) {
+                    sub.remove(&sk);
+                    bad.push(format!("{k}.{sk}"));
+                }
+            }
+            if ok(&k, &toml::Value::Table(sub.clone())) {
+                table.insert(k, toml::Value::Table(sub));
+                continue;
+            }
+        }
+        table.remove(&k);
+        bad.push(k);
+    }
+    bad
 }
 
 fn in_range(v: f32, lo: f32, hi: f32, fallback: f32) -> f32 {
@@ -379,11 +443,67 @@ mod tests {
         std::fs::write(&path, text).unwrap();
         let (cfg, err) = Config::load_from(&path);
         assert!(err.is_some_and(|e| e.contains("config.toml.broken")));
+        assert!(cfg.library_roots.is_empty());
         assert_eq!(cfg.volume, Config::default().volume);
         cfg.save_to(&path).unwrap();
         assert_eq!(std::fs::read_to_string(dir.join("config.toml.broken")).unwrap(), text);
         let (_, err) = Config::load_from(&path);
         assert!(err.is_none());
+    }
+
+    #[test]
+    fn missing_file_loads_defaults_silently() {
+        let dir = test_dir("config-missing");
+        let (cfg, err) = Config::load_from(&dir.join("config.toml"));
+        assert!(err.is_none());
+        assert_eq!(cfg.library_roots, Config::default().library_roots);
+        assert!(!dir.join("config.toml.broken").exists());
+    }
+
+    #[test]
+    fn unreadable_file_is_set_aside() {
+        let dir = test_dir("config-nonutf8");
+        let path = dir.join("config.toml");
+        let bytes = b"volume = 0.5\n# \xff\n";
+        std::fs::write(&path, bytes).unwrap();
+        let (cfg, err) = Config::load_from(&path);
+        assert!(err.is_some_and(|e| e.contains("config.toml.broken")));
+        assert_eq!(std::fs::read(dir.join("config.toml.broken")).unwrap(), bytes);
+        assert!(cfg.library_roots.is_empty());
+
+        let dir = test_dir("config-isdir");
+        let path = dir.join("config.toml");
+        std::fs::create_dir(&path).unwrap();
+        let (cfg, err) = Config::load_from(&path);
+        assert!(err.is_some());
+        assert!(cfg.library_roots.is_empty());
+    }
+
+    #[test]
+    fn one_bad_key_keeps_the_rest() {
+        let dir = test_dir("config-badkey");
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "library_roots = [\"/my/music\"]\nvolume = \"loud\"\nshuffle = true\n[eq]\nenabled = true\nbands = [1.0, 2.0]\n",
+        )
+        .unwrap();
+        let (cfg, err) = Config::load_from(&path);
+        let err = err.unwrap();
+        assert!(err.contains("volume") && err.contains("eq.bands") && err.contains("config.toml.broken"));
+        assert!(cfg.shuffle);
+        assert!(cfg.eq.enabled);
+        assert_eq!(cfg.eq.bands, [0.0; BANDS]);
+        assert_eq!(cfg.volume, Config::default().volume);
+        assert_eq!(cfg.library_roots, vec![PathBuf::from("/my/music")]);
+
+        let dir = test_dir("config-badroots");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "library_roots = 5\nshuffle = true\n").unwrap();
+        let (cfg, err) = Config::load_from(&path);
+        assert!(err.is_some_and(|e| e.contains("library_roots")));
+        assert!(cfg.library_roots.is_empty());
+        assert!(cfg.shuffle);
     }
 
     #[test]

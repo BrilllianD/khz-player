@@ -404,11 +404,16 @@ impl App {
                         self.add_paths(picked.paths, false);
                     }
                     Purpose::LibraryRoot => {
-                        for p in picked.paths {
-                            if !self.cfg.library_roots.contains(&p) {
-                                self.cfg.library_roots.push(p);
-                                self.mark_cfg();
-                            }
+                        let (added, refused) =
+                            add_library_roots(&mut self.cfg.library_roots, picked.paths);
+                        if added {
+                            self.mark_cfg();
+                        }
+                        for p in refused {
+                            self.toast(format!(
+                                "Folder not added, its path is not valid UTF-8: {}",
+                                p.display()
+                            ));
                         }
                     }
                     _ => {}
@@ -417,5 +422,40 @@ impl App {
             Err(crossbeam_channel::TryRecvError::Empty) => {}
             Err(crossbeam_channel::TryRecvError::Disconnected) => self.dialog = None,
         }
+    }
+}
+
+/// Adds picked folders to the roots; returns whether any was added and the
+/// refused ones. TOML cannot store a non-UTF-8 path, so saving would fail
+/// forever with one in the config.
+fn add_library_roots(roots: &mut Vec<PathBuf>, picked: Vec<PathBuf>) -> (bool, Vec<PathBuf>) {
+    let (mut added, mut refused) = (false, Vec::new());
+    for p in picked {
+        if p.to_str().is_none() {
+            refused.push(p);
+        } else if !roots.contains(&p) {
+            roots.push(p);
+            added = true;
+        }
+    }
+    (added, refused)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::ffi::OsStrExt;
+
+    #[test]
+    fn non_utf8_root_refused() {
+        let bad = PathBuf::from(std::ffi::OsStr::from_bytes(b"/m\xffusic"));
+        let a = PathBuf::from("/a");
+        let mut roots = Vec::new();
+        let (added, refused) = add_library_roots(&mut roots, vec![bad.clone(), a.clone(), a.clone()]);
+        assert!(added);
+        assert_eq!(roots, vec![a.clone()]);
+        assert_eq!(refused, vec![bad]);
+        let (added, _) = add_library_roots(&mut roots, vec![a]);
+        assert!(!added);
     }
 }

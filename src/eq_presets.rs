@@ -75,7 +75,7 @@ pub fn render_user(presets: &[Preset]) -> anyhow::Result<String> {
     })?)
 }
 
-/// Loads user presets; an unparsable file is moved aside and reported.
+/// Loads user presets; an unparsable or unreadable file is moved aside and reported.
 pub fn load_user() -> (Vec<Preset>, Option<String>) {
     load_user_from(&user_presets_path())
 }
@@ -86,7 +86,8 @@ pub fn load_user_from(path: &Path) -> (Vec<Preset>, Option<String>) {
             Ok(p) => (p, None),
             Err(e) => (Vec::new(), Some(set_aside(path, &e))),
         },
-        Err(_) => (Vec::new(), None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Vec::new(), None),
+        Err(e) => (Vec::new(), Some(set_aside(path, &e))),
     }
 }
 
@@ -101,6 +102,18 @@ pub fn save_user_to(path: &Path, presets: &[Preset]) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unreadable_or_missing_presets() {
+        let dir = crate::config::test_dir("presets-unreadable");
+        let path = dir.join("eq_presets.toml");
+        assert_eq!(load_user_from(&path), (vec![], None));
+        std::fs::write(&path, b"# \xff\n").unwrap();
+        let (p, err) = load_user_from(&path);
+        assert!(p.is_empty());
+        assert!(err.is_some());
+        assert!(dir.join("eq_presets.toml.broken").exists());
+    }
 
     #[test]
     fn builtin_in_range() {
