@@ -319,6 +319,19 @@ pub fn clear_seen(conn: &Connection, roots: &[PathBuf]) -> rusqlite::Result<()> 
     Ok(())
 }
 
+/// Marks every track under `roots` as seen, so this scan's prune keeps them (roots that did not
+/// walk cleanly).
+pub fn mark_seen_under(conn: &Connection, roots: &[PathBuf]) -> rusqlite::Result<()> {
+    for root in roots {
+        let (lo, hi) = subtree_range(root);
+        conn.execute(
+            "UPDATE tracks SET seen = 1 WHERE path >= ?1 AND path < ?2",
+            params![lo, hi],
+        )?;
+    }
+    Ok(())
+}
+
 pub fn delete_unseen(conn: &Connection) -> rusqlite::Result<usize> {
     conn.execute("DELETE FROM eq_auto WHERE path IN (SELECT path FROM tracks WHERE seen = 0)", [])?;
     conn.execute("DELETE FROM tracks WHERE seen = 0", [])
@@ -488,6 +501,23 @@ mod tests {
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
         assert_eq!(v, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn mark_seen_under_protects_nested_subtree() {
+        let mut conn = open_memory().unwrap();
+        let tx = conn.transaction().unwrap();
+        upsert_track(&tx, &track("/m/a.mp3", "a")).unwrap();
+        upsert_track(&tx, &track("/m/sub/b.mp3", "b")).unwrap();
+        upsert_track(&tx, &track("/other/c.mp3", "c")).unwrap();
+        tx.commit().unwrap();
+        clear_seen(&conn, &[PathBuf::from("/m")]).unwrap();
+        mark_seen_under(&conn, &[PathBuf::from("/m/sub")]).unwrap();
+        assert_eq!(delete_unseen(&conn).unwrap(), 1);
+        let left: Vec<_> = load_tracks(&conn).unwrap().into_iter().map(|t| t.path).collect();
+        assert!(left.contains(&PathBuf::from("/m/sub/b.mp3")));
+        assert!(left.contains(&PathBuf::from("/other/c.mp3")));
+        assert_eq!(left.len(), 2);
     }
 
     #[test]

@@ -84,16 +84,20 @@ fn scan(
     let mut conn = db::open(db_path)?;
     let mut files: Vec<PathBuf> = Vec::new();
     let mut prune_roots: Vec<PathBuf> = Vec::new();
+    let mut keep_roots: Vec<PathBuf> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
     for root in roots {
         let walk = walk_root(root);
         if walk.prunable() {
             prune_roots.push(root.clone());
-        } else if walk.errors.is_empty() {
-            errors.push(format!(
-                "{}: no audio files found, kept its tracks",
-                root.display()
-            ));
+        } else {
+            keep_roots.push(root.clone());
+            if walk.errors.is_empty() {
+                errors.push(format!(
+                    "{}: no audio files found, kept its tracks",
+                    root.display()
+                ));
+            }
         }
         errors.extend(walk.errors);
         files.extend(walk.files);
@@ -105,6 +109,7 @@ fn scan(
 
     let known = db::stamps(&conn)?;
     db::clear_seen(&conn, &prune_roots)?;
+    db::mark_seen_under(&conn, &keep_roots)?;
     let mut updated = 0;
     // Tags are read before the transaction so the write lock is held only for the inserts.
     for (i, batch) in files.chunks(BATCH).enumerate() {
@@ -135,7 +140,9 @@ fn scan(
         });
     }
     let mut removed = db::delete_unseen(&conn)?;
-    removed += db::delete_outside_roots(&conn, roots)?;
+    if !prune_roots.is_empty() {
+        removed += db::delete_outside_roots(&conn, roots)?;
+    }
     let tracks = db::load_tracks(&conn)?;
     tracing::info!(
         "library scan: {total} files, {updated} updated, {removed} removed, {} walk problems in {:.1}s",
@@ -328,6 +335,54 @@ pub(crate) mod tests {
         drop(conn);
         std::fs::remove_dir_all(&music).unwrap();
         assert_eq!(run_roots(&[music], &db), (1, 0, 0, 1));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn nested_unwalked_root_keeps_tracks_and_eq_auto() {
+        let dir = crate::config::test_dir("scan-nested");
+        let music = dir.join("music");
+        std::fs::create_dir_all(music.join("sub")).unwrap();
+        let db = dir.join("lib.db");
+        write_wav(&music.join("a.wav"), 8000);
+        write_wav(&music.join("sub/b.wav"), 8000);
+        write_wav(&music.join("sub/c.wav"), 8000);
+        let roots = [music.clone(), music.join("sub")];
+        assert_eq!(run_roots(&roots, &db), (3, 3, 0, 0));
+        let conn = db::open(&db).unwrap();
+        db::eq_auto_set(&conn, &music.join("sub/b.wav"), Some("Rock")).unwrap();
+        db::eq_auto_set(&conn, &music.join("a.wav"), Some("Rock")).unwrap();
+        drop(conn);
+        std::fs::remove_file(music.join("sub/b.wav")).unwrap();
+        std::fs::remove_file(music.join("sub/c.wav")).unwrap();
+        assert_eq!(run_roots(&roots, &db), (3, 0, 0, 1));
+        let conn = db::open(&db).unwrap();
+        assert_eq!(
+            db::eq_auto_get(&conn, &music.join("sub/b.wav")).unwrap().as_deref(),
+            Some("Rock")
+        );
+        drop(conn);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unwalked_roots_skip_outside_prune() {
+        let dir = crate::config::test_dir("scan-unwalked");
+        let real = dir.join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        let db = dir.join("lib.db");
+        write_wav(&real.join("a.wav"), 8000);
+        assert_eq!(run_roots(std::slice::from_ref(&real), &db), (1, 1, 0, 0));
+        let conn = db::open(&db).unwrap();
+        db::eq_auto_set(&conn, &real.join("a.wav"), Some("Rock")).unwrap();
+        drop(conn);
+        assert_eq!(run_roots(&[dir.join("missing")], &db), (1, 0, 0, 1));
+        let conn = db::open(&db).unwrap();
+        assert_eq!(
+            db::eq_auto_get(&conn, &real.join("a.wav")).unwrap().as_deref(),
+            Some("Rock")
+        );
+        drop(conn);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
