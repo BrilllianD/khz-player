@@ -22,6 +22,14 @@ pub(super) struct AddJob {
     played: bool,
 }
 
+pub(super) const QUEUE_REFUSED: &str = "Queue works on the playing playlist only";
+
+/// True when adding rows to `active`'s queue must be refused: only the
+/// playing list's queue is popped by `next()` and `TrackEnded`.
+fn queue_refused(active: usize, playing_list: usize, loaded: bool, unqueue: bool) -> bool {
+    !unqueue && loaded && active != playing_list
+}
+
 impl App {
     pub fn track_for(&self, path: &Path) -> Track {
         self.db
@@ -250,9 +258,12 @@ impl App {
     }
 
     /// Queues or unqueues the selected rows of the active list (the cursor row
-    /// when nothing is selected). The queue is session only: no config write.
+    /// when nothing is selected). Queueing is refused with a toast when another
+    /// list is playing, since only the playing list's queue is ever popped;
+    /// with nothing loaded the active list becomes the playing one. The queue
+    /// is session only: no config write.
     pub fn enqueue_selected(&mut self) {
-        let pl = &mut self.playlists[self.active];
+        let pl = &self.playlists[self.active];
         let targets = if pl.selected.is_empty() {
             match pl.cursor {
                 Some(c) if c < pl.len() => std::collections::BTreeSet::from([c]),
@@ -261,12 +272,29 @@ impl App {
         } else {
             pl.selected.clone()
         };
-        pl.toggle_queued(&targets);
+        let mut valid = targets.iter().filter(|&&i| i < pl.len()).peekable();
+        let unqueue = valid.peek().is_some() && valid.all(|&i| pl.queue_pos(i).is_some());
+        if queue_refused(self.active, self.playing_list, self.now.is_some(), unqueue) {
+            self.toast(QUEUE_REFUSED);
+            return;
+        }
+        if !unqueue && self.now.is_none() {
+            self.playing_list = self.active;
+        }
+        self.playlists[self.active].toggle_queued(&targets);
         self.refresh_prefetch();
     }
 
-    /// Appends row `index` of the active list to its queue.
+    /// Appends row `index` of the active list to its queue; refused with a
+    /// toast when another list is playing, as in `enqueue_selected`.
     pub fn enqueue_row(&mut self, index: usize) {
+        if queue_refused(self.active, self.playing_list, self.now.is_some(), false) {
+            self.toast(QUEUE_REFUSED);
+            return;
+        }
+        if self.now.is_none() {
+            self.playing_list = self.active;
+        }
         self.playlists[self.active].enqueue(index);
         self.refresh_prefetch();
     }
@@ -307,5 +335,18 @@ impl App {
         }
         self.scan_progress = Some((0, 0));
         self.scan = Some(scanner::start(roots, db::default_path(), self.ctx.clone()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn queue_rule_follows_playing_list() {
+        assert!(queue_refused(1, 0, true, false));
+        assert!(!queue_refused(0, 0, true, false));
+        assert!(!queue_refused(1, 0, true, true));
+        assert!(!queue_refused(1, 0, false, false));
     }
 }
