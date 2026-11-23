@@ -1,7 +1,7 @@
 //! Settings window (Ctrl+P): a section list (Library, Playback, Audio, Appearance) and
 //! one function per section.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use egui::{Id, Modal, RichText};
 
@@ -313,6 +313,23 @@ fn appearance(app: &mut App, ui: &mut egui::Ui) {
         let t = font_text.trim();
         app.cfg.font_path = (!t.is_empty()).then(|| PathBuf::from(t));
         app.mark_cfg();
+    }
+    let check_id = Id::new("settings-font-check");
+    let text = font_text.trim();
+    let cached: Option<(String, Option<String>)> = ui.ctx().data(|d| d.get_temp(check_id));
+    let rejected = match cached {
+        Some((t, r)) if t == text => r,
+        _ => {
+            let r = (!text.is_empty())
+                .then(|| crate::fonts::rejection(Path::new(text)))
+                .flatten();
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(check_id, (text.to_owned(), r.clone())));
+            r
+        }
+    };
+    if let Some(msg) = rejected {
+        ui.label(RichText::new(msg).color(app.theme.warn));
     }
     ui.ctx().data_mut(|d| d.insert_temp(font_id(), font_text));
 }
