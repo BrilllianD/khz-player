@@ -286,6 +286,11 @@ impl App {
         app.mpris.send(MprisUpdate::Volume(app.cfg.volume as f64));
         app.mpris.send(MprisUpdate::Shuffle(app.cfg.shuffle));
         app.mpris.send(MprisUpdate::Repeat(app.cfg.repeat));
+        // The bad file was set aside; write the loaded values back soon so a
+        // crash before exit does not leave only the `.broken` copy.
+        if cfg_error.is_some() {
+            app.mark_cfg();
+        }
         for e in cfg_error.into_iter().chain(presets_error) {
             app.toast(e);
         }

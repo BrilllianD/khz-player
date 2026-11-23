@@ -296,6 +296,7 @@ fn drop_bad_keys(table: &mut toml::Table) -> Vec<String> {
             continue;
         }
         if let toml::Value::Table(mut sub) = v {
+            let mark = bad.len();
             let subkeys: Vec<String> = sub.keys().cloned().collect();
             for sk in subkeys {
                 let mut one = toml::Table::new();
@@ -309,6 +310,8 @@ fn drop_bad_keys(table: &mut toml::Table) -> Vec<String> {
                 table.insert(k, toml::Value::Table(sub));
                 continue;
             }
+            // Not a table field: report the key once, not its sub-keys.
+            bad.truncate(mark);
         }
         table.remove(&k);
         bad.push(k);
@@ -452,6 +455,13 @@ mod tests {
     }
 
     #[test]
+    fn inline_table_in_scalar_key_reported_once() {
+        let mut t: toml::Table = toml::from_str("volume = {a = 1}\nshuffle = true\n").unwrap();
+        assert_eq!(drop_bad_keys(&mut t), vec!["volume".to_owned()]);
+        assert!(!t.contains_key("volume"));
+    }
+
+    #[test]
     fn missing_file_loads_defaults_silently() {
         let dir = test_dir("config-missing");
         let (cfg, err) = Config::load_from(&dir.join("config.toml"));
@@ -485,12 +495,15 @@ mod tests {
         let path = dir.join("config.toml");
         std::fs::write(
             &path,
-            "library_roots = [\"/my/music\"]\nvolume = \"loud\"\nshuffle = true\n[eq]\nenabled = true\nbands = [1.0, 2.0]\n",
+            "library_roots = [\"/my/music\"]\nvolume = \"loud\"\nshuffle = true\n\
+             [eq]\nenabled = true\nbands = [1.0, 2.0]\n",
         )
         .unwrap();
         let (cfg, err) = Config::load_from(&path);
         let err = err.unwrap();
-        assert!(err.contains("volume") && err.contains("eq.bands") && err.contains("config.toml.broken"));
+        assert!(
+            err.contains("volume") && err.contains("eq.bands") && err.contains("config.toml.broken")
+        );
         assert!(cfg.shuffle);
         assert!(cfg.eq.enabled);
         assert_eq!(cfg.eq.bands, [0.0; BANDS]);

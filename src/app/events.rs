@@ -451,7 +451,8 @@ mod tests {
         let bad = PathBuf::from(std::ffi::OsStr::from_bytes(b"/m\xffusic"));
         let a = PathBuf::from("/a");
         let mut roots = Vec::new();
-        let (added, refused) = add_library_roots(&mut roots, vec![bad.clone(), a.clone(), a.clone()]);
+        let (added, refused) =
+            add_library_roots(&mut roots, vec![bad.clone(), a.clone(), a.clone()]);
         assert!(added);
         assert_eq!(roots, vec![a.clone()]);
         assert_eq!(refused, vec![bad]);
