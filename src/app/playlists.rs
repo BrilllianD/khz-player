@@ -273,7 +273,10 @@ impl App {
             pl.selected.clone()
         };
         let mut valid = targets.iter().filter(|&&i| i < pl.len()).peekable();
-        let unqueue = valid.peek().is_some() && valid.all(|&i| pl.queue_pos(i).is_some());
+        if valid.peek().is_none() {
+            return;
+        }
+        let unqueue = valid.all(|&i| pl.queue_pos(i).is_some());
         if queue_refused(self.active, self.playing_list, self.now.is_some(), unqueue) {
             self.toast(QUEUE_REFUSED);
             return;
@@ -288,6 +291,9 @@ impl App {
     /// Appends row `index` of the active list to its queue; refused with a
     /// toast when another list is playing, as in `enqueue_selected`.
     pub fn enqueue_row(&mut self, index: usize) {
+        if index >= self.playlists[self.active].len() {
+            return;
+        }
         if queue_refused(self.active, self.playing_list, self.now.is_some(), false) {
             self.toast(QUEUE_REFUSED);
             return;

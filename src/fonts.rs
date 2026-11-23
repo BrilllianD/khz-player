@@ -49,8 +49,22 @@ fn parseable(bytes: &[u8]) -> bool {
     sfnt_at(0)
 }
 
+/// Largest font file read; real font files are far smaller.
+const MAX_FONT_BYTES: u64 = 64 * 1024 * 1024;
+
+fn size_rejection(len: u64) -> Option<&'static str> {
+    (len > MAX_FONT_BYTES).then_some("file too large")
+}
+
 /// Reads `path` and returns its bytes when egui can load them, else the reason text.
 fn load(path: &Path) -> Result<Vec<u8>, String> {
+    let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    if !meta.is_file() {
+        return Err("not a regular file".into());
+    }
+    if let Some(r) = size_rejection(meta.len()) {
+        return Err(r.into());
+    }
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
     if parseable(&bytes) {
         Ok(bytes)
@@ -70,8 +84,9 @@ fn find(configured: Option<&Path>) -> Option<(PathBuf, Vec<u8>)> {
         .into_iter()
         .chain(CANDIDATES.iter().map(PathBuf::from))
         .filter(|p| p.is_file());
-    let fc = || fc_match().into_iter();
-    sources.chain(fc()).find_map(|p| match load(&p) {
+    sources
+        .chain(std::iter::once_with(fc_match).flatten())
+        .find_map(|p| match load(&p) {
         Ok(bytes) => Some((p, bytes)),
         Err(r) => {
             tracing::warn!("font {}: {r}", p.display());
@@ -155,6 +170,17 @@ mod tests {
         assert!(!parseable(&ttc(1, &[20], &[0, 1, 0, 0, 0, 0])));
         assert!(!parseable(&ttc(1, &[16], &sfnt(b"ttcf"))));
         assert!(parseable(&ttc(1, &[16], &sfnt(&[0, 1, 0, 0]))));
+    }
+
+    #[test]
+    fn rejects_directory_and_oversize_without_reading() {
+        let dir = test_dir("font-dir");
+        assert_eq!(
+            rejection(&dir).as_deref(),
+            Some("Rejected: not a regular file")
+        );
+        assert_eq!(size_rejection(MAX_FONT_BYTES), None);
+        assert_eq!(size_rejection(MAX_FONT_BYTES + 1), Some("file too large"));
     }
 
     #[test]
