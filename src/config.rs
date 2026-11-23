@@ -319,7 +319,8 @@ fn drop_bad_keys(table: &mut toml::Table) -> Vec<String> {
     bad
 }
 
-fn in_range(v: f32, lo: f32, hi: f32, fallback: f32) -> f32 {
+/// Clamps a finite `v` into `lo..=hi`; non-finite gives `fallback`.
+pub(crate) fn in_range(v: f32, lo: f32, hi: f32, fallback: f32) -> f32 {
     if v.is_finite() { v.clamp(lo, hi) } else { fallback }
 }
 

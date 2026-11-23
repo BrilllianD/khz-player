@@ -1,7 +1,7 @@
 //! Realtime-safe DSP: 10-band peaking equalizer, preamp, volume and balance.
 //! Nothing here allocates after construction.
 
-use crate::config::BANDS;
+use crate::config::{in_range, BANDS};
 
 pub const BAND_FREQS: [f32; BANDS] = [
     60.0, 170.0, 310.0, 600.0, 1000.0, 3000.0, 6000.0, 12000.0, 14000.0, 16000.0,
@@ -88,10 +88,11 @@ impl Biquad {
         y
     }
 
-    /// Zeroes state that decayed toward the subnormal range.
+    /// Zeroes state that decayed toward the subnormal range, and drops non-finite
+    /// state left by a NaN or Inf sample.
     fn flush_tiny(&mut self) {
         for z in self.z1.iter_mut().chain(self.z2.iter_mut()) {
-            if z.abs() < 1e-30 {
+            if !z.is_finite() || z.abs() < 1e-30 {
                 *z = 0.0;
             }
         }
@@ -221,20 +222,24 @@ impl Equalizer {
 const VOLUME_RANGE_DB: f32 = 50.0;
 
 /// Linear left/right gains from volume (0..1 on a 50 dB taper, 0 is silent)
-/// and balance (-1..1).
+/// and balance (-1..1). Non-finite volume is silent, non-finite balance is centre.
 pub fn channel_gains(volume: f32, balance: f32) -> (f32, f32) {
-    let v = volume.clamp(0.0, 1.0);
+    let v = in_range(volume, 0.0, 1.0, 0.0);
     let v = if v <= 0.0 {
         0.0
     } else {
         10f32.powf(VOLUME_RANGE_DB * (v - 1.0) / 20.0)
     };
-    let b = balance.clamp(-1.0, 1.0);
+    let b = in_range(balance, -1.0, 1.0, 0.0);
     (v * (1.0 - b).min(1.0), v * (1.0 + b).min(1.0))
 }
 
 /// Moves `cur` toward `target` by at most `step`, landing exactly on `target`.
+/// A non-finite target leaves `cur` unchanged.
 pub fn approach(cur: f32, target: f32, step: f32) -> f32 {
+    if !target.is_finite() {
+        return cur;
+    }
     if cur < target {
         (cur + step).min(target)
     } else {
@@ -339,6 +344,39 @@ mod tests {
         }
         assert!(eq.cur_db.iter().all(|&g| g == 12.0));
         assert!(state(&eq).iter().all(|&z| z == 0.0), "{:?}", state(&eq));
+    }
+
+    #[test]
+    fn channel_gains_non_finite() {
+        assert_eq!(channel_gains(f32::NAN, f32::NAN), (0.0, 0.0));
+        assert_eq!(channel_gains(f32::INFINITY, 0.0), (0.0, 0.0));
+        assert_eq!(channel_gains(1.0, f32::NAN), (1.0, 1.0));
+        assert_eq!(channel_gains(1.0, f32::NEG_INFINITY), (1.0, 1.0));
+    }
+
+    #[test]
+    fn approach_ignores_non_finite_target() {
+        for t in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(approach(0.5, t, 0.1), 0.5);
+        }
+    }
+
+    #[test]
+    fn eq_recovers_from_nan_frame_within_one_block() {
+        let mut eq = Equalizer::new(48000.0);
+        let p = EqParams {
+            enabled: true,
+            preamp_db: 0.0,
+            bands_db: [12.0; BANDS],
+        };
+        let sine = || -> Vec<f32> {
+            (0..1024 * 2).map(|i| ((i / 2) as f32 * 0.05).sin() * 0.5).collect()
+        };
+        eq.process(&mut sine(), &p);
+        eq.process(&mut [f32::NAN, f32::NAN], &p);
+        let mut block = sine();
+        eq.process(&mut block, &p);
+        assert!(block.iter().all(|s| s.is_finite()));
     }
 
     #[test]

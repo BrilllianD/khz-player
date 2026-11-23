@@ -211,7 +211,7 @@ impl App {
     }
 
     pub fn set_volume(&mut self, v: f32) {
-        let v = v.clamp(0.0, 1.0);
+        let Some(v) = volume_input(v) else { return };
         self.cfg.volume = v;
         self.audio.shared.volume.store(v);
         self.mpris.send(MprisUpdate::Volume(v as f64));
@@ -219,11 +219,7 @@ impl App {
     }
 
     pub fn set_balance(&mut self, b: f32) {
-        let b = if b.abs() < 0.04 {
-            0.0
-        } else {
-            b.clamp(-1.0, 1.0)
-        };
+        let Some(b) = balance_input(b) else { return };
         self.cfg.balance = b;
         self.audio.shared.balance.store(b);
         self.mark_cfg();
@@ -274,6 +270,22 @@ fn rg_mode_code(mode: ReplayGainMode, shuffle: bool) -> u8 {
     }
 }
 
+/// Volume to apply, or `None` for a non-finite input (MPRIS may send NaN).
+fn volume_input(v: f32) -> Option<f32> {
+    v.is_finite().then_some(v.clamp(0.0, 1.0))
+}
+
+/// Balance to apply (0.04 dead zone snaps to centre), or `None` for non-finite input.
+fn balance_input(b: f32) -> Option<f32> {
+    if !b.is_finite() {
+        None
+    } else if b.abs() < 0.04 {
+        Some(0.0)
+    } else {
+        Some(b.clamp(-1.0, 1.0))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -285,6 +297,19 @@ mod tests {
         assert_eq!(rg_mode_code(ReplayGainMode::Album, true), RG_ALBUM);
         assert_eq!(rg_mode_code(ReplayGainMode::Auto, true), RG_TRACK);
         assert_eq!(rg_mode_code(ReplayGainMode::Auto, false), RG_ALBUM);
+    }
+
+    #[test]
+    fn volume_and_balance_inputs_drop_non_finite() {
+        // The MPRIS `Volume(NaN)` path: `f64::NAN as f32` reaches `set_volume`.
+        assert_eq!(volume_input(f64::NAN as f32), None);
+        assert_eq!(volume_input(f32::INFINITY), None);
+        assert_eq!(volume_input(1.5), Some(1.0));
+        assert_eq!(volume_input(0.3), Some(0.3));
+        assert_eq!(balance_input(f32::NAN), None);
+        assert_eq!(balance_input(0.03), Some(0.0));
+        assert_eq!(balance_input(-7.0), Some(-1.0));
+        assert_eq!(balance_input(0.5), Some(0.5));
     }
 
     fn secs(n: u64) -> Duration {

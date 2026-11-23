@@ -862,6 +862,21 @@ mod tests {
     }
 
     #[test]
+    fn fill_nan_volume_ramps_to_silence_not_noise() {
+        let shared = Arc::new(Shared::new(1.0, 0.0));
+        let (mut ring, _tap, mut st) = callback(&shared, 4096, 64);
+        warm_up(&mut st);
+        shared.volume.store(f32::NAN);
+        push(&mut ring, &[(0.5, 0.5); 600]);
+
+        let mut out = [0.0f32; 600 * 2];
+        st.fill(&mut out);
+
+        assert!(out.iter().all(|s| s.is_finite() && s.abs() <= 0.5));
+        assert_eq!(out[599 * 2], 0.0);
+    }
+
+    #[test]
     fn fill_scales_by_sleep_gain() {
         let shared = Arc::new(Shared::new(1.0, 0.0));
         let (mut ring, _tap, mut st) = callback(&shared, 4096, 64);

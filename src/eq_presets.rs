@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{BANDS, config_dir, set_aside, write_atomic};
+use crate::config::{BANDS, config_dir, in_range, set_aside, write_atomic};
 
 pub const MAX_DB: f32 = 12.0;
 
@@ -62,8 +62,8 @@ pub fn parse_user(text: &str) -> anyhow::Result<Vec<Preset>> {
     Ok(f.preset
         .into_iter()
         .map(|mut p| {
-            p.preamp = p.preamp.clamp(-MAX_DB, MAX_DB);
-            p.bands = p.bands.map(|b| b.clamp(-MAX_DB, MAX_DB));
+            p.preamp = in_range(p.preamp, -MAX_DB, MAX_DB, 0.0);
+            p.bands = p.bands.map(|b| in_range(b, -MAX_DB, MAX_DB, 0.0));
             p
         })
         .collect())
@@ -124,6 +124,17 @@ mod tests {
         }
         let rock = b.iter().find(|p| p.name == "Rock").unwrap();
         assert_eq!(rock.bands[0], 8.0);
+    }
+
+    #[test]
+    fn non_finite_preset_values_load_as_zero() {
+        let t = "[[preset]]\nname = \"x\"\npreamp = nan\nbands = [inf,1,0,0,0,0,0,0,0,-inf]\n";
+        let p = &parse_user(t).unwrap()[0];
+        assert_eq!(p.preamp, 0.0);
+        assert_eq!(p.bands[0], 0.0);
+        assert_eq!(p.bands[1], 1.0);
+        assert_eq!(p.bands[9], 0.0);
+        assert!(p.bands.iter().all(|b| b.is_finite()));
     }
 
     #[test]
