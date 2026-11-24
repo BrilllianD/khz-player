@@ -16,7 +16,7 @@ docker build -t "$image" - <<EOF
 FROM ubuntu:22.04
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      build-essential pkg-config libasound2-dev curl ca-certificates \
+      build-essential cmake pkg-config libasound2-dev curl ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:\$PATH
 RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain $rust \

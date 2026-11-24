@@ -1,17 +1,31 @@
-//! symphonia 0.6 wrapper producing interleaved stereo f32.
+//! symphonia 0.6 wrapper producing interleaved stereo f32. Opus decodes through
+//! the libopus adapter.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::{Context, anyhow};
 use symphonia::core::codecs::audio::{AudioDecoder, AudioDecoderOptions};
+use symphonia::core::codecs::registry::CodecRegistry;
 use symphonia::core::errors::Error;
 use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::units::{Time, TimeBase, Timestamp};
+
+/// Enabled symphonia codecs plus libopus for Opus.
+fn codecs() -> &'static CodecRegistry {
+    static CODECS: OnceLock<CodecRegistry> = OnceLock::new();
+    CODECS.get_or_init(|| {
+        let mut r = CodecRegistry::new();
+        symphonia::default::register_enabled_codecs(&mut r);
+        r.register_audio_decoder::<symphonia_adapter_libopus::OpusDecoder>();
+        r
+    })
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TrackInfo {
@@ -74,7 +88,7 @@ impl Decoder {
             })
             .filter(|s| s.is_finite() && *s > 0.0)
             .map(Duration::from_secs_f64);
-        let decoder = symphonia::default::get_codecs()
+        let decoder = codecs()
             .make_audio_decoder(&params, &AudioDecoderOptions::default())
             .map_err(|e| anyhow!("unsupported codec: {e}"))?;
         let kbps = duration
@@ -173,7 +187,7 @@ impl Decoder {
         let Some(params) = track.codec_params.as_ref().and_then(|p| p.audio()) else {
             return Ok(false);
         };
-        self.decoder = symphonia::default::get_codecs()
+        self.decoder = codecs()
             .make_audio_decoder(params, &AudioDecoderOptions::default())
             .map_err(|e| anyhow!("unsupported codec: {e}"))?;
         self.track_id = track.id;
@@ -251,6 +265,37 @@ fn ticks_to_frames(ticks: i64, tb: Option<TimeBase>, rate: u32) -> i64 {
 }
 
 #[cfg(test)]
+pub(crate) mod fixtures {
+    use std::path::PathBuf;
+    use std::process::{Command, Stdio};
+
+    /// Runs ffmpeg with `args` writing `name` in a per-process temp dir.
+    /// `None` (skip) only when the ffmpeg binary is missing; a failing ffmpeg panics.
+    pub(crate) fn ffmpeg_fixture(args: &[&str], name: &str) -> Option<PathBuf> {
+        let dir = std::env::temp_dir().join(format!("khz-fixture-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join(name);
+        let res = Command::new("ffmpeg")
+            .args(["-nostdin", "-hide_banner", "-loglevel", "error", "-y"])
+            .args(args)
+            .arg(&out)
+            .stdin(Stdio::null())
+            .output();
+        match res {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!("skip: ffmpeg not found");
+                None
+            }
+            Err(e) => panic!("ffmpeg spawn failed: {e}"),
+            Ok(o) if !o.status.success() => {
+                panic!("ffmpeg failed: {}", String::from_utf8_lossy(&o.stderr))
+            }
+            Ok(_) => Some(out),
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -292,5 +337,68 @@ mod tests {
         assert!((out[0] - (l + extra) * 0.7).abs() < 1e-6);
         assert!((out[1] - (r + extra) * 0.7).abs() < 1e-6);
         assert_eq!(&out[2..], [0.0, 0.0]);
+    }
+
+    fn decode_all(d: &mut Decoder) -> usize {
+        let mut out = Vec::new();
+        while d.next_frames(&mut out).unwrap() {}
+        out.len() / 2
+    }
+
+    fn sine(secs: &str) -> Vec<String> {
+        let src = format!("sine=frequency=440:sample_rate=48000:duration={secs}");
+        ["-f", "lavfi", "-i", &src, "-ac", "2", "-c:a", "libopus", "-b:a", "96k"]
+            .map(String::from)
+            .to_vec()
+    }
+
+    fn fixture(secs: &str, name: &str) -> Option<PathBuf> {
+        let args = sine(secs);
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        fixtures::ffmpeg_fixture(&refs, name)
+    }
+
+    #[test]
+    fn codecs_include_opus() {
+        use symphonia::core::codecs::audio::well_known::CODEC_ID_OPUS;
+        assert!(codecs().get_audio_decoder(CODEC_ID_OPUS).is_some());
+    }
+
+    #[test]
+    fn opus_decodes_exactly_the_samples_ffmpeg_wrote() {
+        let Some(p) = fixture("1", "gapless.opus") else { return };
+        let mut d = Decoder::open(&p).unwrap();
+        assert_eq!(d.info.sample_rate, 48000);
+        assert_eq!(d.info.codec, "OPUS");
+        let n = decode_all(&mut d);
+        let _ = std::fs::remove_file(&p);
+        assert_eq!(n, 48000);
+    }
+
+    #[test]
+    fn webm_opus_decodes_within_one_frame_of_the_source() {
+        let Some(p) = fixture("1", "gapless.webm") else { return };
+        let mut d = Decoder::open(&p).unwrap();
+        let n = decode_all(&mut d);
+        let _ = std::fs::remove_file(&p);
+        assert!((48000..48960).contains(&n), "{n}");
+    }
+
+    #[test]
+    fn opus_seek_lands_within_one_frame() {
+        for name in ["seek.opus", "seek.webm"] {
+            let Some(p) = fixture("3", name) else { return };
+            let total = decode_all(&mut Decoder::open(&p).unwrap());
+            let mut d = Decoder::open(&p).unwrap();
+            let reached = d.seek(Duration::from_millis(1500)).unwrap();
+            let rest = decode_all(&mut d);
+            let _ = std::fs::remove_file(&p);
+            assert!(
+                (reached.as_secs_f64() - 1.5).abs() <= 0.02,
+                "{name}: reached {reached:?}"
+            );
+            let skipped = (total - rest) as i64;
+            assert!((skipped - 72000).abs() <= 960, "{name}: skipped {skipped}");
+        }
     }
 }

@@ -10,9 +10,10 @@ use lofty::tag::{Tag, TagType};
 use super::{ReplayGain, Track};
 
 /// Extensions the scanner picks up. Every one must decode with the symphonia
-/// features enabled in `Cargo.toml`; Opus, WavPack, APE and Musepack do not.
+/// features enabled in `Cargo.toml` (Opus through the libopus adapter);
+/// WavPack, APE and Musepack do not.
 pub const AUDIO_EXTENSIONS: &[&str] = &[
-    "mp3", "mp2", "mp1", "flac", "ogg", "oga", "m4a", "mp4", "aac", "wav", "aif", "aiff", "aifc",
+    "mp3", "mp2", "mp1", "flac", "ogg", "oga", "m4a", "mp4", "aac", "wav", "aif", "aiff", "aifc", "opus", "webm",
 ];
 
 pub fn is_audio(path: &Path) -> bool {
@@ -264,15 +265,39 @@ mod tests {
         // Containers and codecs covered by the enabled symphonia features.
         const DECODABLE: &[&str] = &[
             "mp3", "mp2", "mp1", "flac", "ogg", "oga", "m4a", "mp4", "aac", "wav", "aif", "aiff",
-            "aifc",
+            "aifc", "opus", "webm",
         ];
         for ext in AUDIO_EXTENSIONS {
             assert!(DECODABLE.contains(ext), "{ext} listed but not decodable");
         }
-        for ext in ["opus", "wv", "ape", "mpc", "txt"] {
+        for ext in ["wv", "ape", "mpc", "txt"] {
             assert!(!is_audio(Path::new(&format!("a.{ext}"))), "{ext}");
         }
         assert!(is_audio(Path::new("a.AIFF")));
+        assert!(is_audio(Path::new("a.OPUS")));
+    }
+
+    #[test]
+    fn opus_tags_read_through_lofty() {
+        use crate::audio::decoder::fixtures::ffmpeg_fixture;
+        let common = [
+            "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=1", "-ac", "2",
+            "-c:a", "libopus", "-b:a", "96k",
+        ];
+        let mut args = common.to_vec();
+        args.extend(["-metadata", "title=Khz", "-metadata", "artist=Opus"]);
+        let Some(p) = ffmpeg_fixture(&args, "tags.opus") else { return };
+        let t = super::read(&p);
+        let _ = std::fs::remove_file(&p);
+        assert_eq!(t.title.as_deref(), Some("Khz"));
+        assert_eq!(t.artist.as_deref(), Some("Opus"));
+        let ms = t.duration_ms.unwrap();
+        assert!((950..=1050).contains(&ms), "{ms}");
+
+        let Some(w) = ffmpeg_fixture(&common, "tags.webm") else { return };
+        let t = super::read(&w);
+        let _ = std::fs::remove_file(&w);
+        assert_eq!(t.path, w);
     }
 
     #[test]

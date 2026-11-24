@@ -13,7 +13,8 @@ eframe = { version = "0.36.2", default-features = false, features = ["glow", "wa
 egui = "0.36.2"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 cpal = { version = "0.18.2", features = ["pulseaudio"] }
-symphonia = { version = "0.6.1", default-features = false, features = ["mp3", "mp1", "mp2", "flac", "vorbis", "ogg", "aac", "alac", "adpcm", "isomp4", "aiff", "wav", "pcm", "id3v1", "id3v2", "ape", "opt-simd"] }
+symphonia = { version = "0.6.1", default-features = false, features = ["mp3", "mp1", "mp2", "flac", "vorbis", "ogg", "aac", "alac", "adpcm", "isomp4", "aiff", "wav", "pcm", "id3v1", "id3v2", "ape", "mkv", "opt-simd"] }
+symphonia-adapter-libopus = "0.3"
 rubato = "5.0.1"
 realfft = "3.5.0"
 rtrb = "0.4"
