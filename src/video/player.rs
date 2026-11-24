@@ -1,6 +1,5 @@
 //! `VideoPlayer` over libmpv: one mpv core with its own window, one event thread.
 
-use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -21,12 +20,11 @@ pub struct VideoPlayer {
     rx: Receiver<VideoEvent>,
     /// For events made on the caller's side (a path mpv cannot be given).
     tx: Sender<VideoEvent>,
-    /// Paths of accepted `loadfile` commands, oldest first. A successful `loadfile replace`
-    /// normally yields one `StartFile` event, which pops one entry; mpv's `path` property is not
-    /// synchronous with the event (a missing file may have cleared it already), so the queue is
-    /// the fallback. Loads sent back to back can be coalesced by mpv into one `StartFile`; then
-    /// the live `path` names the file and the entries before it are dropped.
-    pending: Arc<Mutex<VecDeque<PathBuf>>>,
+    /// Path of the newest accepted `loadfile replace`. mpv's `path` property is not synchronous
+    /// with `StartFile` (a missing file may have cleared it already), so this is the fallback.
+    /// mpv may skip or coalesce older loads but always ends on the newest one, which is also the
+    /// only path the app accepts events for.
+    last_load: Arc<Mutex<Option<PathBuf>>>,
     pos_ms: Arc<AtomicU64>,
     alive: Arc<AtomicBool>,
     closing: Arc<AtomicBool>,
@@ -78,23 +76,23 @@ impl VideoPlayer {
         }
         let mpv = Arc::new(mpv);
         let (tx, rx) = crossbeam_channel::unbounded();
-        let pending = Arc::new(Mutex::new(VecDeque::new()));
+        let last_load = Arc::new(Mutex::new(None));
         let pos_ms = Arc::new(AtomicU64::new(0));
         let alive = Arc::new(AtomicBool::new(true));
         let closing = Arc::new(AtomicBool::new(false));
         let thread = {
             let (mpv, tx, pos_ms) = (mpv.clone(), tx.clone(), pos_ms.clone());
-            let pending = pending.clone();
+            let last_load = last_load.clone();
             let (alive, closing) = (alive.clone(), closing.clone());
             std::thread::Builder::new()
                 .name("mpv-events".into())
-                .spawn(move || event_loop(&mpv, &tx, &pending, &pos_ms, &alive, &closing, &repaint))?
+                .spawn(move || event_loop(&mpv, &tx, &last_load, &pos_ms, &alive, &closing, &repaint))?
         };
         Ok(VideoPlayer {
             mpv,
             rx,
             tx,
-            pending,
+            last_load,
             pos_ms,
             alive,
             closing,
@@ -133,10 +131,10 @@ impl VideoPlayer {
             mpv_secs(start)
         };
         Self::log("start", self.mpv.set_property("start", start.as_str()));
-        // Lock across the command so the queue order matches mpv's command order.
-        let mut pending = self.pending.lock().unwrap();
+        // Lock across the command so the slot always names mpv's newest accepted load.
+        let mut last_load = self.last_load.lock().unwrap();
         match self.mpv.command("loadfile", &[p, "replace"]) {
-            Ok(()) => pending.push_back(path.to_path_buf()),
+            Ok(()) => *last_load = Some(path.to_path_buf()),
             Err(e) => {
                 tracing::debug!("mpv loadfile: {}", error_text(&e));
                 let _ = self.tx.send(VideoEvent::Ended {
@@ -229,7 +227,7 @@ impl Drop for VideoPlayer {
 fn event_loop(
     mpv: &Mpv,
     tx: &Sender<VideoEvent>,
-    pending: &Mutex<VecDeque<PathBuf>>,
+    last_load: &Mutex<Option<PathBuf>>,
     pos_ms: &AtomicU64,
     alive: &AtomicBool,
     closing: &AtomicBool,
@@ -253,7 +251,7 @@ fn event_loop(
             ),
             Some(Ok(ev)) => match ev {
                 Event::StartFile => (
-                    Some(Raw::StartFile(start_path(mpv, pending))),
+                    Some(Raw::StartFile(start_path(mpv, last_load))),
                     false,
                 ),
                 Event::FileLoaded => (Some(Raw::FileLoaded), false),
@@ -296,18 +294,17 @@ fn event_loop(
     }
 }
 
-/// The path of the file a `StartFile` event is for. Prefers mpv's live `path` (and drops older
-/// queue entries mpv skipped); when mpv already cleared it, the oldest queued load.
-fn start_path(mpv: &Mpv, pending: &Mutex<VecDeque<PathBuf>>) -> Option<PathBuf> {
-    let mut q = pending.lock().unwrap();
-    if let Ok(live) = mpv.get_property::<String>("path") {
-        let live = PathBuf::from(live);
-        if let Some(i) = q.iter().position(|p| *p == live) {
-            q.drain(..=i);
-        }
-        return Some(live);
-    }
-    q.pop_front()
+/// The path of the file a `StartFile` event is for. Prefers mpv's live `path`; when mpv already
+/// cleared it (a missing file fails fast), the newest accepted load. With `loadfile replace` mpv
+/// always ends on the newest load (it may skip or coalesce older ones), and the app only accepts
+/// events for the newest path, so an older path would only get the error dropped.
+fn start_path(mpv: &Mpv, last_load: &Mutex<Option<PathBuf>>) -> Option<PathBuf> {
+    let last = last_load.lock().unwrap();
+    pick_start(mpv.get_property::<String>("path").ok().map(PathBuf::from), last.as_ref())
+}
+
+fn pick_start(live: Option<PathBuf>, last: Option<&PathBuf>) -> Option<PathBuf> {
+    live.or_else(|| last.cloned())
 }
 
 fn property(name: &str, change: PropertyData<'_>) -> Option<Raw> {
@@ -358,6 +355,16 @@ mod tests {
     use std::time::Instant;
 
     const NULL_OUT: &[(&str, &str)] = &[("vo", "null"), ("ao", "null"), ("force-window", "no")];
+
+    #[test]
+    fn start_path_prefers_live_then_newest_load() {
+        let (a, b) = (PathBuf::from("/a.mp4"), PathBuf::from("/b.mp4"));
+        // Live path wins, even over a different newest load (a late StartFile for an older file).
+        assert_eq!(pick_start(Some(a.clone()), Some(&b)), Some(a));
+        // mpv already cleared `path` (missing file): the newest accepted load, never an older one.
+        assert_eq!(pick_start(None, Some(&b)), Some(b));
+        assert_eq!(pick_start(None, None), None);
+    }
 
     fn player() -> VideoPlayer {
         VideoPlayer::with_options(egui::Context::default(), NULL_OUT).expect("libmpv new")
