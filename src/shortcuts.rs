@@ -38,6 +38,8 @@ pub enum Action {
     ToggleTimeDisplay,
     /// Ctrl+D: UI at double size (toggle).
     ToggleDoubleSize,
+    /// Alt+V: raise the video window.
+    ShowVideo,
     /// Move the playlist cursor; the bool extends the selection (Shift).
     Cursor(Move, bool),
     /// Move the selected block one row: -1 up, +1 down.
@@ -48,6 +50,7 @@ const BINDINGS: &[(Modifiers, Key, Action)] = &[
     (Modifiers::NONE, Key::Z, Action::Prev),
     (Modifiers::NONE, Key::X, Action::Play),
     (Modifiers::NONE, Key::C, Action::PauseToggle),
+    (Modifiers::ALT, Key::V, Action::ShowVideo),
     (Modifiers::NONE, Key::V, Action::Stop),
     (Modifiers::NONE, Key::B, Action::Next),
     (Modifiers::NONE, Key::Space, Action::TogglePlay),
@@ -150,6 +153,13 @@ mod tests {
         ctx.run_ui(input, |ui| actions = collect(ui.ctx(), focus))
             .drop_without_applying_deltas();
         actions
+    }
+
+    #[test]
+    fn alt_v_shows_video() {
+        assert_eq!(press(false, Modifiers::ALT, Key::V), [Action::ShowVideo]);
+        assert_eq!(press(true, Modifiers::ALT, Key::V), [Action::ShowVideo]);
+        assert_eq!(press(false, Modifiers::NONE, Key::V), [Action::Stop]);
     }
 
     fn release(focus: bool, modifiers: Modifiers, key: Key) -> Vec<Action> {

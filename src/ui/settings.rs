@@ -134,6 +134,15 @@ fn playback(app: &mut App, ui: &mut egui::Ui) {
         app.mark_cfg();
         app.refresh_prefetch();
     }
+    let mut video_on = app.cfg.video.enabled;
+    if ui.checkbox(&mut video_on, "Play video in a separate window").changed() {
+        app.set_video_enabled(video_on);
+    }
+    let video_hint = match app.video_error() {
+        Some(e) => format!("Video unavailable: {e}. Video files play as audio."),
+        None => "Alt+V raises the video window.".to_string(),
+    };
+    ui.label(RichText::new(video_hint).color(app.theme.text_dim));
     let mut toggle = false;
     ui.horizontal(|ui| {
         ui.label("Sleep timer");

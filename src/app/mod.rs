@@ -444,6 +444,7 @@ impl App {
                     self.play_index(self.active, i);
                 }
             }
+            Action::ShowVideo => self.show_video(),
             Action::FileInfo => {
                 let pl = &self.playlists[self.active];
                 let row = pl

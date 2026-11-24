@@ -32,7 +32,59 @@ pub(super) struct VideoCur {
     pub(super) initial: PlayerState,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum Handover {
+    Resume { play: bool },
+    Load,
+}
+
+/// How a track moves from mpv to the engine when video is switched off.
+fn handover(state: PlayerState, loaded: bool) -> Handover {
+    match (loaded, state) {
+        (true, PlayerState::Playing) => Handover::Resume { play: true },
+        (true, PlayerState::Paused) => Handover::Resume { play: false },
+        _ => Handover::Load,
+    }
+}
+
 impl App {
+    /// Raises the mpv window while a video track is current.
+    pub fn show_video(&self) {
+        if self.backend == Backend::Video
+            && let Some(v) = &self.video
+        {
+            v.raise();
+        }
+    }
+
+    /// Settings toggle for video playback. Off while mpv owns the track: the engine takes the
+    /// same track over at the same position and state.
+    pub fn set_video_enabled(&mut self, on: bool) {
+        if self.cfg.video.enabled == on {
+            return;
+        }
+        self.cfg.video.enabled = on;
+        self.mark_cfg();
+        if on || self.backend != Backend::Video {
+            return;
+        }
+        let Some(cur) = &self.video_cur else {
+            self.leave_video();
+            return;
+        };
+        let (path, gain, loaded) = (cur.path.clone(), cur.gain, cur.loaded);
+        let at = self.position();
+        match handover(self.state, loaded) {
+            Handover::Resume { play } => {
+                self.t_resume(path, at, gain);
+                if play {
+                    self.t_play();
+                }
+            }
+            Handover::Load => self.t_load(path, false, gain),
+        }
+    }
+
     /// True when `path` plays in the mpv window. Never creates the player.
     pub(super) fn plays_as_video(&self, path: &Path) -> bool {
         let usable = self.cfg.video.enabled && self.video_error.is_none();
@@ -245,6 +297,17 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn handover_rules() {
+        use PlayerState::*;
+        assert_eq!(handover(Playing, true), Handover::Resume { play: true });
+        assert_eq!(handover(Paused, true), Handover::Resume { play: false });
+        assert_eq!(handover(Stopped, true), Handover::Load);
+        assert_eq!(handover(Playing, false), Handover::Load);
+        assert_eq!(handover(Paused, false), Handover::Load);
+        assert_eq!(handover(Stopped, false), Handover::Load);
+    }
 
     #[test]
     fn video_only_when_all_three() {
