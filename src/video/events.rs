@@ -1,6 +1,10 @@
 //! Pure part of the mpv wrapper: the event type the app sees, the state machine that maps
 //! raw mpv events onto it, and value mapping for volume and output device. No libmpv here,
 //! so everything is tested in both builds.
+//!
+//! `Seeked` follows every `Seek` + `PlaybackRestart` pair. `load` sets mpv's `start` only for
+//! a nonzero start, so a plain load queues no seek; a load with a nonzero start does emit
+//! `Seeked(start)`, accepted as an accurate position report.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -61,8 +65,6 @@ pub(crate) struct Mapper {
     eof: bool,
     ended: bool,
     seeking: bool,
-    /// The first `PlaybackRestart` of a file ends loading; its `Seek` is not the user's.
-    restarted: bool,
     duration: Option<Duration>,
     position: Duration,
 }
@@ -75,7 +77,6 @@ impl Mapper {
             eof: false,
             ended: false,
             seeking: false,
-            restarted: false,
             duration: None,
             position: Duration::ZERO,
         }
@@ -96,7 +97,6 @@ impl Mapper {
                 self.eof = false;
                 self.ended = false;
                 self.seeking = false;
-                self.restarted = false;
                 self.duration = None;
                 self.position = Duration::ZERO;
             }
@@ -149,10 +149,7 @@ impl Mapper {
             }
             Raw::Seek => self.seeking = true,
             Raw::PlaybackRestart(t) => {
-                if !self.restarted {
-                    self.restarted = true;
-                    self.seeking = false;
-                } else if self.seeking {
+                if self.seeking {
                     self.seeking = false;
                     if let Some(s) = t.filter(|s| s.is_finite() && *s >= 0.0) {
                         self.position = Duration::from_secs_f64(s);
@@ -347,10 +344,20 @@ mod tests {
     }
 
     #[test]
-    fn initial_seek_and_restart_are_silent() {
+    fn seek_right_after_started_gives_seeked() {
         let mut m = Mapper::new();
         started(&mut m, "/a");
         assert!(m.feed(Raw::Seek).is_empty());
+        assert_eq!(
+            m.feed(Raw::PlaybackRestart(Some(2.0))),
+            vec![VideoEvent::Seeked(Duration::from_secs(2))]
+        );
+    }
+
+    #[test]
+    fn restart_without_seek_after_load_is_silent() {
+        let mut m = Mapper::new();
+        started(&mut m, "/a");
         assert!(m.feed(Raw::PlaybackRestart(Some(0.0))).is_empty());
     }
 

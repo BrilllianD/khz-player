@@ -116,10 +116,13 @@ impl VideoPlayer {
             return;
         };
         Self::log("pause", self.mpv.set_property("pause", !play));
-        Self::log(
-            "start",
-            self.mpv.set_property("start", mpv_secs(start).as_str()),
-        );
+        // A set `start` makes mpv queue a start seek, even "0.000"; "none" avoids it.
+        let start = if start == Duration::ZERO {
+            "none".to_string()
+        } else {
+            mpv_secs(start)
+        };
+        Self::log("start", self.mpv.set_property("start", start.as_str()));
         Self::log("loadfile", self.mpv.command("loadfile", &[p, "replace"]));
     }
 
@@ -389,6 +392,10 @@ mod tests {
             })
             .then_some(())
         });
+        assert!(
+            !seen.iter().any(|e| matches!(e, VideoEvent::Seeked(_))),
+            "spurious Seeked after a plain load: {seen:?}"
+        );
     }
 
     #[test]
