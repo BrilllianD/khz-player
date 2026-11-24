@@ -2,3 +2,7 @@
 
 on it
 
+## 2026-11-24T01:06:38Z — Bronnikov Aleksandr
+
+6cf4407: DownloadConfig, VideoConfig, clamps, tests
+
