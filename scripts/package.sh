@@ -3,6 +3,9 @@
 #
 # The binary is built inside Ubuntu 22.04 so it needs only glibc 2.35, not the
 # host's: it runs on Ubuntu 22.04+, Debian 12+, Fedora 36+ and Arch.
+# The tarball is built without the `video` feature: Ubuntu 22.04 has only libmpv 1.x
+# and libmpv2 needs client API 2, so the tarball plays video files as audio. If another
+# default feature is added later, list it with --features on the build line below.
 # Output: dist/khz-player-<version>-x86_64-linux.tar.gz and its .sha256.
 set -euo pipefail
 
@@ -28,7 +31,7 @@ EOF
 docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/src" -w /src \
     -e CARGO_HOME=/src/target/package/cargo-home \
     -e CARGO_TARGET_DIR=/src/target/package \
-    "$image" cargo build --release --locked
+    "$image" cargo build --release --locked --no-default-features
 
 stage="dist/$name"
 rm -rf "$stage" && mkdir -p "$stage"

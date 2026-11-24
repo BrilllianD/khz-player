@@ -34,7 +34,12 @@ rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 anyhow = "1"
 thiserror = "2"
 tracing = "0.1"
+libmpv2 = { version = "7.0.1", default-features = false, optional = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[features]
+default = ["video"]
+video = ["dep:libmpv2"]
 
 [profile.dev]
 debug = "line-tables-only"

@@ -15,3 +15,4 @@ pub mod shortcuts;
 pub mod theme;
 pub mod theme_watch;
 pub mod ui;
+pub mod video;
