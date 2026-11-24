@@ -6,7 +6,7 @@ use crossbeam_channel::Receiver;
 use rusqlite::Connection;
 
 use crate::audio::spectrum::Spectrum;
-use crate::audio::{AudioHandle, Command, Event, PlayerState, TrackInfo};
+use crate::audio::{AudioHandle, Event, PlayerState, TrackInfo};
 use crate::config::{Config, Visualization};
 use crate::dialog::{self, Purpose};
 use crate::eq_presets::{self, Preset};
@@ -29,6 +29,7 @@ mod eq;
 mod persist;
 mod playback;
 mod playlists;
+mod transport;
 
 use persist::should_save;
 use playlists::{AddJob, AddRequest, AddTarget};
@@ -310,10 +311,10 @@ impl App {
             // old position if khz-player quit mid-track.
             let path = t.path.clone();
             let gain = t.replay_gain;
-            app.audio.send(match app.cfg.last_position_ms {
-                Some(ms) => Command::Resume { path, at: Duration::from_millis(ms), gain },
-                None => Command::Load { path, play: false, gain },
-            });
+            match app.cfg.last_position_ms {
+                Some(ms) => app.t_resume(path, Duration::from_millis(ms), gain),
+                None => app.t_load(path, false, gain),
+            }
         }
         // Entries outside the library have no cached tags; read them off the UI thread,
         // after the command-line request so its first file plays first.
@@ -363,20 +364,20 @@ impl App {
             Action::Prev => self.prev(),
             Action::Play => self.play(),
             Action::PauseToggle => match self.state {
-                PlayerState::Playing => self.audio.send(Command::Pause),
-                PlayerState::Paused => self.audio.send(Command::Play),
+                PlayerState::Playing => self.t_pause(),
+                PlayerState::Paused => self.t_play(),
                 PlayerState::Stopped => {}
             },
-            Action::Stop => self.audio.send(Command::Stop),
+            Action::Stop => self.t_stop(),
             Action::Next => self.next(),
             Action::TogglePlay => {
                 if self.state == PlayerState::Playing {
-                    self.audio.send(Command::Pause);
+                    self.t_pause();
                 } else {
                     self.play();
                 }
             }
-            Action::SeekRel(ms) => self.audio.send(Command::SeekRel(ms)),
+            Action::SeekRel(ms) => self.t_seek_rel(ms),
             Action::VolumeDelta(d) => self.set_volume(self.cfg.volume + d),
             Action::CycleRepeat => self.set_repeat(self.cfg.repeat.cycle()),
             Action::ToggleShuffle => self.set_shuffle(!self.cfg.shuffle),
@@ -548,7 +549,7 @@ impl eframe::App for App {
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.save_now();
-        self.audio.send(Command::Stop);
+        self.t_stop();
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {

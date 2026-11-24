@@ -23,7 +23,7 @@ impl App {
                         .send(MprisUpdate::Position(if s == PlayerState::Stopped {
                             Duration::ZERO
                         } else {
-                            self.audio.position()
+                            self.position()
                         }));
                 }
                 Event::TrackEnded => {
@@ -296,7 +296,7 @@ impl App {
             match a {
                 MprisAction::PlayPause => {
                     if self.state == PlayerState::Playing {
-                        self.audio.send(Command::Pause);
+                        self.t_pause();
                     } else {
                         self.play();
                     }
@@ -307,21 +307,19 @@ impl App {
                         self.play();
                     }
                 }
-                MprisAction::Pause => self.audio.send(Command::Pause),
-                MprisAction::Stop => self.audio.send(Command::Stop),
+                MprisAction::Pause => self.t_pause(),
+                MprisAction::Stop => self.t_stop(),
                 MprisAction::Next => self.next(),
                 MprisAction::Previous => self.prev(),
                 MprisAction::Seek(us) => {
                     let len = self.now.as_ref().and_then(|n| n.duration);
-                    if mpris::seek_past_end(self.audio.position(), us, len) {
+                    if mpris::seek_past_end(self.position(), us, len) {
                         self.next();
                     } else {
-                        self.audio.send(Command::SeekRel(us / 1000));
+                        self.t_seek_rel(us / 1000);
                     }
                 }
-                MprisAction::SetPosition(us) => self
-                    .audio
-                    .send(Command::Seek(Duration::from_micros(us.max(0) as u64))),
+                MprisAction::SetPosition(us) => self.t_seek(Duration::from_micros(us.max(0) as u64)),
                 MprisAction::Volume(v) => self.set_volume(v as f32),
                 MprisAction::Shuffle(v) => self.set_shuffle(v),
                 MprisAction::Repeat(r) => self.set_repeat(r),
@@ -340,7 +338,7 @@ impl App {
         {
             self.last_mpris_pos = Instant::now();
             self.mpris
-                .send(MprisUpdate::Position(self.audio.position()));
+                .send(MprisUpdate::Position(self.position()));
         }
         let nonempty = |l: Option<&Playlist>| l.is_some_and(|p| !p.is_empty());
         let play_list = self.playlists.get(self.playing_list);

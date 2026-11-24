@@ -96,7 +96,7 @@ impl App {
         let path = pl.tracks[index].path.clone();
         let gain = pl.tracks[index].replay_gain;
         self.playing_list = list;
-        self.audio.send(Command::Load { path, play: true, gain });
+        self.t_load(path, true, gain);
     }
 
     pub(super) fn playing(&mut self) -> &mut Playlist {
@@ -115,8 +115,8 @@ impl App {
 
     pub fn prev(&mut self) {
         // Winamp: restart the track if more than a few seconds in.
-        if self.state == PlayerState::Playing && self.audio.position() > Duration::from_secs(5) {
-            self.audio.send(Command::Seek(Duration::ZERO));
+        if self.state == PlayerState::Playing && self.position() > Duration::from_secs(5) {
+            self.t_seek(Duration::ZERO);
             return;
         }
         let (repeat, shuffle) = (self.cfg.repeat, self.cfg.shuffle);
@@ -135,7 +135,7 @@ impl App {
             let idx = pl.selected.first().copied().or(pl.current).unwrap_or(0);
             self.play_index(self.active, idx);
         } else {
-            self.audio.send(Command::Play);
+            self.t_play();
         }
     }
 
@@ -145,7 +145,7 @@ impl App {
             return;
         }
         if !self.cfg.gapless || self.stop_after {
-            self.audio.send(Command::PrefetchNext(None));
+            self.t_prefetch(None);
             return;
         }
         let (repeat, shuffle) = (self.cfg.repeat, self.cfg.shuffle);
@@ -154,7 +154,7 @@ impl App {
             .peek_next(repeat, shuffle, true)
             .and_then(|i| pl.tracks.get(i))
             .map(|t| (t.path.clone(), t.replay_gain));
-        self.audio.send(Command::PrefetchNext(next));
+        self.t_prefetch(next);
     }
 
     pub fn toggle_stop_after(&mut self) {
@@ -193,7 +193,7 @@ impl App {
             SleepStep::Gain(g) => self.audio.shared.sleep_gain.store(g),
             SleepStep::Pause => {
                 self.audio.shared.sleep_gain.store(0.0);
-                self.audio.send(Command::Pause);
+                self.t_pause();
                 self.toast("Sleep timer: paused");
             }
             SleepStep::Restore => self.audio.shared.sleep_gain.store(1.0),

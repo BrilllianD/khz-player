@@ -39,7 +39,7 @@ impl App {
         self.cfg.last_playlist = self.playlists.get(list).map(|p| p.name.clone());
         self.cfg.last_track_index = self.playlists.get(list).and_then(|p| p.current);
         self.cfg.last_position_ms = (self.now.is_some() && self.state != PlayerState::Stopped)
-            .then(|| self.audio.position().as_millis() as u64);
+            .then(|| self.position().as_millis() as u64);
         if let Err(e) = self.cfg.save() {
             tracing::warn!("save config: {e}");
         }

@@ -6,7 +6,7 @@ use egui::{Align2, FontId, Id, Rect, Sense, Ui, pos2, vec2};
 
 use super::widgets;
 use crate::app::App;
-use crate::audio::{Command, PlayerState};
+use crate::audio::PlayerState;
 use crate::config::Visualization;
 use crate::dialog::Purpose;
 use crate::library::format_duration;
@@ -61,7 +61,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     // --- time / marquee / spectrum -----------------------------------------
     let top = title.bottom() + 6.0;
     let digits_r = Rect::from_min_size(pos2(x0, top), vec2(180.0, 60.0));
-    let pos = app.audio.position();
+    let pos = app.position();
     let dur = app.duration();
     let shown = match app.seek_drag {
         Some(f) => dur.map(|d| d.mul_f32(f)).unwrap_or(pos),
@@ -237,7 +237,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         if (sresp.drag_stopped() || (sresp.clicked() && !sresp.dragged()))
             && let (Some(f), Some(d)) = (app.seek_drag.take(), dur)
         {
-            app.audio.send(Command::Seek(d.mul_f32(f)));
+            app.t_seek(d.mul_f32(f));
         }
         if let Some(p) = sresp.hover_pos()
             && let Some(d) = dur

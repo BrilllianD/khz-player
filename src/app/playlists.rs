@@ -235,7 +235,7 @@ impl App {
         if self.playing_list == idx {
             // The track keeps playing; next/prev continue in the visible list.
             self.playing_list = self.active;
-            self.audio.send(Command::PrefetchNext(None));
+            self.t_prefetch(None);
         } else {
             self.playing_list = fix(self.playing_list);
         }
