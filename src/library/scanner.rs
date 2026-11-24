@@ -2,10 +2,10 @@
 
 use std::path::{Path, PathBuf};
 
-use crossbeam_channel::Receiver;
 use walkdir::WalkDir;
 
 use super::{Track, db, tags};
+use crate::job::{self, Job, Terminal};
 
 const BATCH: usize = 200;
 
@@ -22,24 +22,19 @@ pub enum ScanEvent {
     Error(String),
 }
 
-pub fn start(roots: Vec<PathBuf>, db_path: PathBuf, repaint: egui::Context) -> Receiver<ScanEvent> {
-    let (tx, rx) = crossbeam_channel::unbounded();
-    let spawned = std::thread::Builder::new()
-        .name("library-scan".into())
-        .spawn(move || {
-            let send = |ev: ScanEvent| {
-                let _ = tx.send(ev);
-                repaint.request_repaint();
-            };
-            match scan(&roots, &db_path, &send) {
-                Ok(ev) => send(ev),
-                Err(e) => send(ScanEvent::Error(format!("{e:#}"))),
-            }
-        });
-    if let Err(e) = spawned {
-        tracing::error!("spawn scanner: {e}");
+impl Terminal for ScanEvent {
+    fn is_terminal(&self) -> bool {
+        matches!(self, ScanEvent::Done { .. } | ScanEvent::Error(_))
     }
-    rx
+}
+
+pub fn start(roots: Vec<PathBuf>, db_path: PathBuf, repaint: egui::Context) -> Job<ScanEvent> {
+    job::spawn("library-scan", repaint, move |sink, _cancel| {
+        match scan(&roots, &db_path, &|ev| sink.send(ev)) {
+            Ok(ev) => sink.send(ev),
+            Err(e) => sink.send(ScanEvent::Error(format!("{e:#}"))),
+        }
+    })
 }
 
 /// Result of walking one library root.

@@ -2,11 +2,11 @@
 
 use std::path::{Path, PathBuf};
 
-use crossbeam_channel::Receiver;
 use rusqlite::Connection;
 use walkdir::WalkDir;
 
 use super::{Track, db, tags};
+use crate::job::{self, Job, Terminal};
 use crate::m3u;
 
 /// Tracks per `AddEvent::Tracks`.
@@ -88,23 +88,23 @@ fn collect(paths: &[PathBuf], conn: Option<&Connection>, send: &dyn Fn(AddEvent)
     }
 }
 
-pub fn start(paths: Vec<PathBuf>, db_path: PathBuf, repaint: egui::Context) -> Receiver<AddEvent> {
-    let (tx, rx) = crossbeam_channel::unbounded();
-    let spawned = std::thread::Builder::new()
-        .name("playlist-add".into())
-        .spawn(move || {
-            let send = |ev: AddEvent| {
-                let _ = tx.send(ev);
-                repaint.request_repaint();
-            };
-            let conn = db::open(&db_path).ok();
-            collect(&paths, conn.as_ref(), &send);
-            send(AddEvent::Done);
-        });
-    if let Err(e) = spawned {
-        tracing::error!("spawn playlist adder: {e}");
+impl Terminal for AddEvent {
+    fn is_terminal(&self) -> bool {
+        matches!(self, AddEvent::Done)
     }
-    rx
+}
+
+pub fn start(paths: Vec<PathBuf>, db_path: PathBuf, repaint: egui::Context) -> Job<AddEvent> {
+    job::spawn("playlist-add", repaint, move |sink, cancel| {
+        let conn = db::open(&db_path).ok();
+        for p in &paths {
+            if cancel.is_set() {
+                break;
+            }
+            collect(std::slice::from_ref(p), conn.as_ref(), &|ev| sink.send(ev));
+        }
+        sink.send(AddEvent::Done);
+    })
 }
 
 #[cfg(test)]

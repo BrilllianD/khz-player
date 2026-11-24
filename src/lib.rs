@@ -6,6 +6,7 @@ pub mod config;
 pub mod dialog;
 pub mod eq_presets;
 pub mod fonts;
+pub mod job;
 pub mod library;
 pub mod m3u;
 pub mod mpris;

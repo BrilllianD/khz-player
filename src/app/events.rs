@@ -214,9 +214,17 @@ impl App {
     }
 
     pub(super) fn handle_scan_events(&mut self) {
-        let Some(rx) = &self.scan else { return };
-        let events: Vec<ScanEvent> = rx.try_iter().collect();
-        for ev in events {
+        let Some(job) = &mut self.scan else { return };
+        let polled = job.poll();
+        for ev in polled {
+            let ev = match ev {
+                Poll::Event(ev) => ev,
+                Poll::Lost => {
+                    self.toast("Library scan stopped unexpectedly".to_string());
+                    self.end_scan();
+                    continue;
+                }
+            };
             match ev {
                 ScanEvent::Progress { done, total } => self.scan_progress = Some((done, total)),
                 ScanEvent::Done {
@@ -237,16 +245,19 @@ impl App {
                     if updated + removed > 0 {
                         tracing::info!("library: {updated} updated, {removed} removed");
                     }
-                    self.scan = None;
-                    self.scan_progress = None;
+                    self.end_scan();
                 }
                 ScanEvent::Error(e) => {
                     self.toast(format!("Library scan failed: {e}"));
-                    self.scan = None;
-                    self.scan_progress = None;
+                    self.end_scan();
                 }
             }
         }
+    }
+
+    fn end_scan(&mut self) {
+        self.scan = None;
+        self.scan_progress = None;
     }
 
     /// Replaces playlist entries' metadata with fresh library data after a scan.

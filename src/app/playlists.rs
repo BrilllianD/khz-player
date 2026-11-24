@@ -16,7 +16,7 @@ pub(super) struct AddRequest {
 }
 
 pub(super) struct AddJob {
-    rx: Receiver<AddEvent>,
+    job: Job<AddEvent>,
     target: AddTarget,
     play: bool,
     played: bool,
@@ -55,9 +55,9 @@ impl App {
             return;
         }
         if let Some(req) = self.add_queue.pop_front() {
-            let rx = adder::start(req.paths, db::default_path(), self.ctx.clone());
+            let job = adder::start(req.paths, db::default_path(), self.ctx.clone());
             self.add_job = Some(AddJob {
-                rx,
+                job,
                 target: req.target,
                 play: req.play,
                 played: false,
@@ -71,21 +71,20 @@ impl App {
     }
 
     pub(super) fn handle_add_events(&mut self) {
-        let Some(job) = &self.add_job else { return };
-        let mut events = Vec::new();
-        let mut finished = false;
-        loop {
-            match job.rx.try_recv() {
-                Ok(ev) => events.push(ev),
-                Err(crossbeam_channel::TryRecvError::Empty) => break,
-                Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                    finished = true;
-                    break;
+        let Some(add) = &mut self.add_job else { return };
+        let polled = add.job.poll();
+        let finished = add.job.is_finished();
+        let (target, play) = (add.target, add.play);
+        for ev in polled {
+            let ev = match ev {
+                Poll::Event(ev) => ev,
+                Poll::Lost => {
+                    if target != AddTarget::Fill {
+                        self.toast("Adding files stopped unexpectedly".to_string());
+                    }
+                    continue;
                 }
-            }
-        }
-        let (target, play) = (job.target, job.play);
-        for ev in events {
+            };
             match ev {
                 AddEvent::Tracks(tracks) => match target {
                     AddTarget::List(i) if i < self.playlists.len() => {
@@ -108,7 +107,7 @@ impl App {
                         self.toast(msg);
                     }
                 }
-                AddEvent::Done => finished = true,
+                AddEvent::Done => {}
             }
         }
         if finished {
@@ -225,6 +224,9 @@ impl App {
         };
         if let Some(j) = &mut self.add_job {
             retarget(&mut j.target);
+            if j.target == AddTarget::Dropped {
+                j.job.cancel();
+            }
         }
         for r in &mut self.add_queue {
             retarget(&mut r.target);

@@ -10,6 +10,7 @@ use crate::audio::{AudioHandle, Command, Event, PlayerState, TrackInfo};
 use crate::config::{Config, Visualization};
 use crate::dialog::{self, Purpose};
 use crate::eq_presets::{self, Preset};
+use crate::job::{Job, Poll};
 use crate::library::adder::{self, AddEvent};
 use crate::library::scanner::{self, ScanEvent};
 use crate::library::{Track, db, tags};
@@ -113,7 +114,7 @@ pub struct App {
 
     pub library: Vec<Track>,
     pub library_gen: u64,
-    scan: Option<Receiver<ScanEvent>>,
+    scan: Option<Job<ScanEvent>>,
     pub scan_progress: Option<(usize, usize)>,
     pub library_search: String,
     pub library_cache: ui::library_panel::Cache,
