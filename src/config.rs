@@ -80,6 +80,46 @@ pub struct WindowConfig {
     pub library_w: Option<f32>,
 }
 
+pub const MIN_VIDEO_HEIGHT: u32 = 144;
+pub const MAX_VIDEO_HEIGHT: u32 = 4320;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DownloadConfig {
+    /// Download folder; None = `<first library root>/Downloads`.
+    pub folder: Option<PathBuf>,
+    /// Keep the video stream (prompt checkbox default); false = audio only.
+    pub keep_video: bool,
+    /// Highest video height yt-dlp may pick, in pixels.
+    pub max_height: u32,
+    /// Download a whole playlist from a playlist URL; false = the single item only.
+    pub playlist: bool,
+}
+
+impl Default for DownloadConfig {
+    fn default() -> Self {
+        Self {
+            folder: None,
+            keep_video: false,
+            max_height: 1080,
+            playlist: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VideoConfig {
+    /// Play video files in the mpv window; false = they play as audio through the engine.
+    pub enabled: bool,
+}
+
+impl Default for VideoConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -120,6 +160,10 @@ pub struct Config {
     /// Loudness normalisation from the file tags (Settings, Audio).
     pub replaygain: ReplayGainConfig,
     pub window: WindowConfig,
+    /// Downloads through yt-dlp (Settings, Download).
+    pub download: DownloadConfig,
+    /// Video playback in the mpv window.
+    pub video: VideoConfig,
 }
 
 impl Default for Config {
@@ -154,6 +198,8 @@ impl Default for Config {
             eq: EqConfig::default(),
             replaygain: ReplayGainConfig::default(),
             window: WindowConfig::default(),
+            download: DownloadConfig::default(),
+            video: VideoConfig::default(),
         }
     }
 }
@@ -277,6 +323,12 @@ impl Config {
         for v in [&mut self.window.w, &mut self.window.h, &mut self.window.library_w] {
             *v = v.filter(|x| x.is_finite() && *x > 0.0);
         }
+        self.download.max_height = self.download.max_height.clamp(MIN_VIDEO_HEIGHT, MAX_VIDEO_HEIGHT);
+        self.download.folder = self
+            .download
+            .folder
+            .take()
+            .filter(|p| !p.as_os_str().to_string_lossy().trim().is_empty());
     }
 }
 
@@ -559,5 +611,71 @@ mod tests {
         assert!(err.is_none());
         assert_eq!(c.window.w, None);
         assert_eq!(c.window.library_w, None);
+    }
+
+    #[test]
+    fn download_and_video_default_when_missing() {
+        let c: Config = toml::from_str("volume = 0.5\n").unwrap();
+        assert_eq!(c.download, DownloadConfig::default());
+        assert_eq!(c.download.max_height, 1080);
+        assert!(!c.download.keep_video);
+        assert!(!c.download.playlist);
+        assert_eq!(c.download.folder, None);
+        assert!(c.video.enabled);
+    }
+
+    #[test]
+    fn download_and_video_roundtrip() {
+        let mut c = Config::default();
+        c.download.folder = Some("/m/dl".into());
+        c.download.keep_video = true;
+        c.download.max_height = 720;
+        c.download.playlist = true;
+        c.video.enabled = false;
+        let s = toml::to_string_pretty(&c).unwrap();
+        assert!(s.contains("[download]") && s.contains("[video]"));
+        let back: Config = toml::from_str(&s).unwrap();
+        assert_eq!(back.download, c.download);
+        assert_eq!(back.video, c.video);
+    }
+
+    #[test]
+    fn download_max_height_clamped_on_load() {
+        let dir = test_dir("config-dl-height");
+        let path = dir.join("config.toml");
+        for (written, want) in [(0, 144), (99999, 4320), (480, 480)] {
+            std::fs::write(&path, format!("[download]\nmax_height = {written}\n")).unwrap();
+            let (c, err) = Config::load_from(&path);
+            assert!(err.is_none());
+            assert_eq!(c.download.max_height, want);
+        }
+    }
+
+    #[test]
+    fn download_empty_folder_loads_as_none() {
+        let dir = test_dir("config-dl-folder");
+        let path = dir.join("config.toml");
+        for (written, want) in [("", None), ("  ", None), ("/m/dl", Some(PathBuf::from("/m/dl")))] {
+            std::fs::write(&path, format!("[download]\nfolder = \"{written}\"\n")).unwrap();
+            let (c, err) = Config::load_from(&path);
+            assert!(err.is_none());
+            assert_eq!(c.download.folder, want);
+        }
+    }
+
+    #[test]
+    fn bad_download_key_keeps_the_rest() {
+        let dir = test_dir("config-dl-bad");
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "[download]\nmax_height = \"big\"\nkeep_video = true\n[video]\nenabled = false\n",
+        )
+        .unwrap();
+        let (c, err) = Config::load_from(&path);
+        assert!(err.is_some_and(|e| e.contains("download.max_height")));
+        assert!(c.download.keep_video);
+        assert_eq!(c.download.max_height, 1080);
+        assert!(!c.video.enabled);
     }
 }
