@@ -6,3 +6,7 @@ Decided by the user 2026-11-24: the release tarball stays on the Ubuntu 22.04 im
 
 on it
 
+## 2026-11-24T01:21:31Z — Bronnikov Aleksandr
+
+dc851b2: VideoPlayer over libmpv2, feature video, CI 24.04, tarball without video
+
