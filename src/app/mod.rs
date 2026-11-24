@@ -21,6 +21,7 @@ use crate::theme::Theme;
 use crate::theme_watch::{self, ThemeWatcher};
 use crate::ui;
 use crate::ui::playlist_panel::ScrollMode;
+use crate::video::{VideoEvent, VideoPlayer};
 use crate::{fonts, m3u};
 
 
@@ -78,6 +79,13 @@ pub struct App {
     pub nerd_font: bool,
 
     pub audio: AudioHandle,
+    /// mpv window player, created on the first video track.
+    pub video: Option<VideoPlayer>,
+    /// Which backend owns the current track.
+    backend: transport::Backend,
+    video_cur: Option<transport::VideoCur>,
+    /// Why video playback is unavailable; set once per session.
+    video_error: Option<String>,
     /// Last attempt to reopen the audio output.
     last_reopen: Option<Instant>,
     /// The user was told the output is gone; cleared when it is back.
@@ -237,6 +245,10 @@ impl App {
             theme_watch,
             nerd_font,
             audio,
+            video: None,
+            backend: transport::Backend::Engine,
+            video_cur: None,
+            video_error: None,
             last_reopen: None,
             reopen_failing: false,
             spectrum,
@@ -482,6 +494,7 @@ impl eframe::App for App {
         self.last_frame = now;
 
         self.handle_audio_events();
+        self.handle_video_events();
         self.handle_cover_events();
         let want = self.cover.as_deref().filter(|_| self.cfg.show_cover);
         self.cover_tex.sync(ctx, want);

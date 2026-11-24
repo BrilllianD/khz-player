@@ -1,6 +1,21 @@
 use super::*;
 use crate::audio::shared::{RG_ALBUM, RG_OFF, RG_TRACK};
 use crate::config::ReplayGainMode;
+use crate::playlist::Repeat;
+
+/// Next row after the current track ended on its own, honouring stop-after-current.
+pub(super) fn advance_after_end(
+    stop_after: &mut bool,
+    pl: &mut Playlist,
+    repeat: Repeat,
+    shuffle: bool,
+) -> Option<usize> {
+    if std::mem::take(stop_after) {
+        None
+    } else {
+        pl.next(repeat, shuffle, true)
+    }
+}
 
 pub const SLEEP_FADE: Duration = Duration::from_secs(10);
 const SLEEP_RESTORE_DELAY: Duration = Duration::from_millis(200);
@@ -148,12 +163,17 @@ impl App {
             self.t_prefetch(None);
             return;
         }
+        if self.backend == transport::Backend::Video {
+            self.t_prefetch(None);
+            return;
+        }
         let (repeat, shuffle) = (self.cfg.repeat, self.cfg.shuffle);
         let pl = self.playing();
         let next = pl
             .peek_next(repeat, shuffle, true)
             .and_then(|i| pl.tracks.get(i))
             .map(|t| (t.path.clone(), t.replay_gain));
+        let next = next.filter(|(p, _)| !self.plays_as_video(p));
         self.t_prefetch(next);
     }
 
@@ -214,6 +234,9 @@ impl App {
         let Some(v) = volume_input(v) else { return };
         self.cfg.volume = v;
         self.audio.shared.volume.store(v);
+        if let Some(video) = &self.video {
+            video.set_volume(v);
+        }
         self.mpris.send(MprisUpdate::Volume(v as f64));
         self.mark_cfg();
     }
@@ -289,6 +312,39 @@ fn balance_input(b: f32) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::library::Track;
+
+    fn pl3(current: usize) -> Playlist {
+        let mut p = Playlist::new("t");
+        p.add((0..3).map(|i| Track::from_path(PathBuf::from(format!("/m/{i}.mp3")))));
+        p.set_current(current);
+        p
+    }
+
+    #[test]
+    fn advance_after_end_rules() {
+        let mut stop = false;
+        let mut p = pl3(0);
+        assert_eq!(advance_after_end(&mut stop, &mut p, Repeat::Off, false), Some(1));
+
+        let mut stop = true;
+        let mut p = pl3(0);
+        assert_eq!(advance_after_end(&mut stop, &mut p, Repeat::Off, false), None);
+        assert!(!stop);
+        assert_eq!(p.current, Some(0));
+
+        let mut stop = false;
+        let mut p = pl3(2);
+        assert_eq!(advance_after_end(&mut stop, &mut p, Repeat::Off, false), None);
+        let mut p = pl3(2);
+        assert_eq!(advance_after_end(&mut stop, &mut p, Repeat::All, false), Some(0));
+        let mut p = pl3(2);
+        assert_eq!(advance_after_end(&mut stop, &mut p, Repeat::One, false), Some(2));
+
+        let mut p = pl3(0);
+        p.enqueue(2);
+        assert_eq!(advance_after_end(&mut stop, &mut p, Repeat::Off, false), Some(2));
+    }
 
     #[test]
     fn rg_mode_code_maps_modes_and_auto_follows_shuffle() {

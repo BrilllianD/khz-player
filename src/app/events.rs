@@ -1,6 +1,7 @@
 use super::*;
 use crate::library::art;
 use crate::ui::playlist_panel::ScrollMode;
+use transport::Backend;
 
 /// Minimum time between attempts to reopen a lost audio output.
 const REOPEN_INTERVAL: Duration = Duration::from_secs(2);
@@ -9,31 +10,14 @@ pub(super) const DEVICE_FALLBACK_MSG: &str = "Output device not found, using the
 impl App {
     pub(super) fn handle_audio_events(&mut self) {
         while let Ok(ev) = self.audio.events.try_recv() {
+            if !engine_event_applies(self.backend, &ev) {
+                continue;
+            }
             match ev {
                 Event::Loaded(info) => self.on_track_started(info, false),
                 Event::Advanced(info) => self.on_track_started(info, true),
-                Event::StateChanged(s) => {
-                    if s == PlayerState::Playing && self.state != s {
-                        // The marquee holds still when not playing; restart its scroll.
-                        self.marquee_start = Instant::now();
-                    }
-                    self.state = s;
-                    self.mpris.send(MprisUpdate::Status(s));
-                    self.mpris
-                        .send(MprisUpdate::Position(if s == PlayerState::Stopped {
-                            Duration::ZERO
-                        } else {
-                            self.position()
-                        }));
-                }
-                Event::TrackEnded => {
-                    let (repeat, shuffle) = (self.cfg.repeat, self.cfg.shuffle);
-                    if std::mem::take(&mut self.stop_after) {
-                        // Stopped as asked.
-                    } else if let Some(i) = self.playing().next(repeat, shuffle, true) {
-                        self.play_index(self.playing_list, i);
-                    }
-                }
+                Event::StateChanged(s) => self.set_state(s),
+                Event::TrackEnded => self.on_track_end(),
                 Event::Seeked(pos) => self.mpris.send(MprisUpdate::Seeked(pos)),
                 Event::LoadFailed { path, msg, play } => {
                     let name = path.file_name().unwrap_or_default().to_string_lossy();
@@ -52,6 +36,104 @@ impl App {
                         Some(n) => self.toast(format!("{n}: {msg}")),
                         None => self.toast(msg),
                     }
+                }
+            }
+        }
+    }
+
+    /// Applies a player state: marquee restart, MPRIS status and position.
+    pub(super) fn set_state(&mut self, s: PlayerState) {
+        if s == PlayerState::Playing && self.state != s {
+            // The marquee holds still when not playing; restart its scroll.
+            self.marquee_start = Instant::now();
+        }
+        self.state = s;
+        self.mpris.send(MprisUpdate::Status(s));
+        self.mpris
+            .send(MprisUpdate::Position(if s == PlayerState::Stopped {
+                Duration::ZERO
+            } else {
+                self.position()
+            }));
+    }
+
+    /// The current track ended: stop as asked, or play the next one.
+    pub(super) fn on_track_end(&mut self) {
+        let (repeat, shuffle) = (self.cfg.repeat, self.cfg.shuffle);
+        self.playing();
+        let next = playback::advance_after_end(
+            &mut self.stop_after,
+            &mut self.playlists[self.playing_list],
+            repeat,
+            shuffle,
+        );
+        if let Some(i) = next {
+            self.play_index(self.playing_list, i);
+        }
+    }
+
+    pub(super) fn handle_video_events(&mut self) {
+        let evs = match &self.video {
+            Some(v) => v.poll(),
+            None => return,
+        };
+        for ev in evs {
+            let cur_path = self.video_cur.as_ref().map(|c| c.path.clone());
+            if self.backend != Backend::Video || !video_event_applies(&ev, cur_path.as_deref()) {
+                continue;
+            }
+            match ev {
+                VideoEvent::Started(p) => {
+                    let initial = self.video_cur.as_ref().map_or(PlayerState::Playing, |c| c.initial);
+                    let info = self.video_track_info(&p);
+                    self.on_track_started(info, false);
+                    self.set_state(initial);
+                }
+                VideoEvent::Paused(true) => {
+                    if self.state == PlayerState::Playing {
+                        self.set_state(PlayerState::Paused);
+                    }
+                }
+                VideoEvent::Paused(false) => {
+                    if self.video_cur.as_ref().is_some_and(|c| c.loaded) {
+                        self.set_state(PlayerState::Playing);
+                    }
+                }
+                VideoEvent::Duration(d) => {
+                    if let Some(n) = &mut self.now
+                        && Some(&n.path) == cur_path.as_ref()
+                    {
+                        n.duration = Some(d);
+                    }
+                }
+                VideoEvent::Seeked(pos) => self.mpris.send(MprisUpdate::Seeked(pos)),
+                VideoEvent::Ended { error: None, .. } => {
+                    if let Some(c) = &mut self.video_cur {
+                        c.loaded = false;
+                    }
+                    self.set_state(PlayerState::Stopped);
+                    self.on_track_end();
+                }
+                VideoEvent::Ended { path, error: Some(msg) } => {
+                    let name = path.file_name().unwrap_or_default().to_string_lossy();
+                    self.toast(format!("{name}: {msg}"));
+                    self.failed.insert(path.clone());
+                    let play = self.video_cur.as_mut().is_some_and(|c| {
+                        c.loaded = false;
+                        c.play
+                    });
+                    self.set_state(PlayerState::Stopped);
+                    if play {
+                        self.skip_failed(&path);
+                    }
+                }
+                VideoEvent::WindowClosed => {
+                    self.video = None;
+                    if let Some(c) = &mut self.video_cur {
+                        c.loaded = false;
+                    }
+                    self.set_state(PlayerState::Stopped);
+                    return;
                 }
             }
         }
@@ -87,6 +169,9 @@ impl App {
                 let was_failing = std::mem::take(&mut self.reopen_failing);
                 self.spectrum = Spectrum::new(rate);
                 self.refresh_prefetch();
+                if let Some(v) = &self.video {
+                    v.set_device(self.cfg.output_device.as_deref());
+                }
                 if self.audio.device_fallback {
                     self.toast(DEVICE_FALLBACK_MSG);
                 } else if !manual || was_failing {
@@ -434,6 +519,20 @@ impl App {
     }
 }
 
+/// Engine events are stale while mpv owns the track, except failures worth a toast.
+fn engine_event_applies(backend: Backend, ev: &Event) -> bool {
+    backend == Backend::Engine || matches!(ev, Event::Error { .. } | Event::LoadFailed { .. })
+}
+
+/// Whether a video event concerns the track `cur` that the app believes is loaded.
+fn video_event_applies(ev: &VideoEvent, cur: Option<&Path>) -> bool {
+    match ev {
+        VideoEvent::Started(p) | VideoEvent::Ended { path: p, .. } => cur == Some(p.as_path()),
+        VideoEvent::WindowClosed => true,
+        _ => cur.is_some(),
+    }
+}
+
 /// Adds picked folders to the roots; returns whether any was added and the
 /// refused ones. TOML cannot store a non-UTF-8 path, so saving would fail
 /// forever with one in the config.
@@ -448,6 +547,64 @@ fn add_library_roots(roots: &mut Vec<PathBuf>, picked: Vec<PathBuf>) -> (bool, V
         }
     }
     (added, refused)
+}
+
+#[cfg(test)]
+mod routing_tests {
+    use super::*;
+
+    fn ev_all() -> Vec<Event> {
+        vec![
+            Event::Loaded(info("/a")),
+            Event::Advanced(info("/a")),
+            Event::StateChanged(PlayerState::Stopped),
+            Event::TrackEnded,
+            Event::Seeked(Duration::ZERO),
+            Event::Error { path: None, msg: "x".into() },
+            Event::LoadFailed { path: "/a".into(), msg: "x".into(), play: true },
+        ]
+    }
+
+    fn info(p: &str) -> TrackInfo {
+        TrackInfo {
+            path: p.into(),
+            sample_rate: 0,
+            channels: 2,
+            duration: None,
+            kbps: None,
+            codec: String::new(),
+        }
+    }
+
+    #[test]
+    fn engine_events_filtered_while_video() {
+        for ev in ev_all() {
+            assert!(engine_event_applies(Backend::Engine, &ev));
+            let failure = matches!(ev, Event::Error { .. } | Event::LoadFailed { .. });
+            assert_eq!(engine_event_applies(Backend::Video, &ev), failure, "{ev:?}");
+        }
+    }
+
+    #[test]
+    fn video_events_filtered_by_path() {
+        let (a, b) = (PathBuf::from("/a"), PathBuf::from("/b"));
+        let started = VideoEvent::Started(a.clone());
+        let ended = VideoEvent::Ended { path: a.clone(), error: None };
+        for ev in [&started, &ended] {
+            assert!(video_event_applies(ev, Some(&a)));
+            assert!(!video_event_applies(ev, Some(&b)));
+            assert!(!video_event_applies(ev, None));
+        }
+        for ev in [
+            VideoEvent::Paused(true),
+            VideoEvent::Duration(Duration::ZERO),
+            VideoEvent::Seeked(Duration::ZERO),
+        ] {
+            assert!(video_event_applies(&ev, Some(&a)));
+            assert!(!video_event_applies(&ev, None));
+        }
+        assert!(video_event_applies(&VideoEvent::WindowClosed, None));
+    }
 }
 
 #[cfg(all(test, unix))]
