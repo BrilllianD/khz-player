@@ -254,6 +254,14 @@ pub fn upsert_track(tx: &Transaction<'_>, t: &Track) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Inserts or updates one track in its own transaction (downloaded files).
+/// Must not be called while the caller holds a transaction on `conn`.
+pub fn upsert_one(conn: &Connection, t: &Track) -> rusqlite::Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    upsert_track(&tx, t)?;
+    tx.commit()
+}
+
 pub fn mark_seen(tx: &Transaction<'_>, path: &Path) -> rusqlite::Result<()> {
     tx.prepare_cached("UPDATE tracks SET seen = 1 WHERE path = ?1")?
         .execute([path_bytes(path)])?;
@@ -518,6 +526,18 @@ mod tests {
         assert!(left.contains(&PathBuf::from("/m/sub/b.mp3")));
         assert!(left.contains(&PathBuf::from("/other/c.mp3")));
         assert_eq!(left.len(), 2);
+    }
+
+    #[test]
+    fn upsert_one_inserts_then_updates() {
+        let conn = open_memory().unwrap();
+        upsert_one(&conn, &track("/m/dl/a.opus", "A")).unwrap();
+        let a = get_track(&conn, Path::new("/m/dl/a.opus")).unwrap().unwrap();
+        assert_eq!(a.title.as_deref(), Some("A"));
+        upsert_one(&conn, &track("/m/dl/a.opus", "B")).unwrap();
+        let a = get_track(&conn, Path::new("/m/dl/a.opus")).unwrap().unwrap();
+        assert_eq!(a.title.as_deref(), Some("B"));
+        assert_eq!(load_tracks(&conn).unwrap().len(), 1);
     }
 
     #[test]

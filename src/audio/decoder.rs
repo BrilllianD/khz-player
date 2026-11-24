@@ -401,4 +401,19 @@ mod tests {
             assert!((skipped - 72000).abs() <= 960, "{name}: skipped {skipped}");
         }
     }
+
+    #[test]
+    fn mp4_h264_aac_plays_audio_track() {
+        let args = [
+            "-f", "lavfi", "-i", "testsrc=size=160x120:rate=25:duration=1", "-f", "lavfi", "-i",
+            "sine=frequency=440:sample_rate=48000:duration=1", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-shortest",
+        ];
+        let Some(p) = fixtures::ffmpeg_fixture(&args, "s5-dec-video.mp4") else { return };
+        let mut d = Decoder::open(&p).unwrap();
+        assert_eq!(d.info.sample_rate, 48000);
+        let frames = decode_all(&mut d);
+        let _ = std::fs::remove_file(&p);
+        assert!((45600..=50400).contains(&frames), "{frames}");
+    }
 }

@@ -6,6 +6,12 @@ use lofty::config::{ParseOptions, ParsingMode};
 use lofty::prelude::*;
 use lofty::probe::Probe;
 use lofty::tag::{Tag, TagType};
+use symphonia::core::codecs::CodecParameters;
+use symphonia::core::codecs::video::well_known::CODEC_ID_MJPEG;
+use symphonia::core::formats::probe::Hint;
+use symphonia::core::formats::{FormatOptions, Track as SymTrack};
+use symphonia::core::io::MediaSourceStream;
+use symphonia::core::meta::MetadataOptions;
 
 use super::{ReplayGain, Track};
 
@@ -119,6 +125,14 @@ fn apply_tag(t: &mut Track, tag: &Tag) {
     t.replay_gain = replay_gain(tag);
 }
 
+/// Relaxed: skip malformed frames (e.g. a bogus TDRC date) instead of failing the file.
+fn parse_opts() -> ParseOptions {
+    ParseOptions::new()
+        .parsing_mode(ParsingMode::Relaxed)
+        .read_cover_art(false)
+        .max_junk_bytes(64 * 1024)
+}
+
 /// Reads metadata; on failure returns a track with only path and file stamp,
 /// so the title falls back to the file stem.
 pub fn read(path: &Path) -> Track {
@@ -129,12 +143,7 @@ pub fn read(path: &Path) -> Track {
         size,
         ..Default::default()
     };
-    // Relaxed: skip malformed frames (e.g. a bogus TDRC date) instead of failing the file.
-    let opts = ParseOptions::new()
-        .parsing_mode(ParsingMode::Relaxed)
-        .read_cover_art(false)
-        .max_junk_bytes(64 * 1024);
-    let tagged = match Probe::open(path).and_then(|p| p.options(opts).read()) {
+    let tagged = match Probe::open(path).and_then(|p| p.options(parse_opts()).read()) {
         Ok(f) => f,
         Err(e) => {
             tracing::debug!("tags {}: {e}", path.display());
@@ -169,11 +178,95 @@ fn pick_replay_gain(primary: Option<&Tag>, all: &[Tag]) -> ReplayGain {
         .unwrap_or_default()
 }
 
+/// Trimmed single-line value that starts with `http://` or `https://`.
+fn is_url(s: &str) -> Option<String> {
+    let s = s.trim();
+    if s.is_empty() || s.contains(['\n', '\r']) {
+        return None;
+    }
+    let low = s.get(..8).unwrap_or(s).to_ascii_lowercase();
+    (low.starts_with("http://") || low.starts_with("https://")).then(|| s.to_string())
+}
+
+/// First URL among `PodcastUrl` (MP4 `purl`, ID3 `WFED`), `Comment`, then `Description`.
+/// lofty 0.25 has no unknown-key item, so a Vorbis `PURL` comment is dropped; ffmpeg writes
+/// the `comment` metadata of Ogg files as `DESCRIPTION`, which is the field that carries it.
+fn url_from_tag(tag: &Tag) -> Option<String> {
+    tag.get_strings(ItemKey::PodcastUrl)
+        .find_map(is_url)
+        .or_else(|| tag.get_strings(ItemKey::Comment).find_map(is_url))
+        .or_else(|| tag.get_strings(ItemKey::Description).find_map(is_url))
+}
+
+/// Page URL a downloader (yt-dlp) wrote into the tags, if any. `.webm` has none (lofty
+/// cannot read Matroska tags).
+pub fn source_url(path: &Path) -> Option<String> {
+    let tagged = match Probe::open(path).and_then(|p| p.options(parse_opts()).read()) {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::debug!("source_url {}: {e}", path.display());
+            return None;
+        }
+    };
+    tagged
+        .primary_tag()
+        .and_then(url_from_tag)
+        .or_else(|| tagged.tags().iter().find_map(url_from_tag))
+        .or_else(|| {
+            (tagged.file_type() == lofty::file::FileType::Mpeg)
+                .then(|| id3_user_url(path))
+                .flatten()
+        })
+}
+
+/// ffmpeg writes `purl` and `comment` into MP3 as `TXXX` frames, which lofty keeps out of
+/// its generic `Tag`: read them from the ID3v2 tag itself, `purl` first.
+fn id3_user_url(path: &Path) -> Option<String> {
+    use lofty::file::AudioFile;
+    use lofty::id3::v2::Frame;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mpeg = lofty::mpeg::MpegFile::read_from(&mut file, parse_opts()).ok()?;
+    let tag = mpeg.id3v2()?;
+    ["purl", "comment"].into_iter().find_map(|key| {
+        tag.into_iter().find_map(|f| match f {
+            Frame::UserText(t) if t.description.eq_ignore_ascii_case(key) => is_url(&t.content),
+            _ => None,
+        })
+    })
+}
+
+/// A video stream that is not a cover stored as MJPEG or a single frame.
+fn is_real_video(t: &SymTrack) -> bool {
+    matches!(&t.codec_params, Some(CodecParameters::Video(p)) if p.codec != CODEC_ID_MJPEG)
+        && !t.num_frames.is_some_and(|n| n <= 1)
+}
+
+/// True when the file has a real video track. Covers (Ogg/FLAC pictures, MP4 `covr`,
+/// Matroska attachments) are not tracks; a cover stored as an MJPEG or one-frame
+/// video stream is ignored too. Blocking file I/O.
+pub fn has_video(path: &Path) -> bool {
+    let Ok(file) = std::fs::File::open(path) else { return false };
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+    let Ok(reader) = symphonia::default::get_probe().probe(
+        &hint,
+        mss,
+        FormatOptions::default(),
+        MetadataOptions::default(),
+    ) else {
+        return false;
+    };
+    reader.tracks().iter().any(is_real_video)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         AUDIO_EXTENSIONS, apply_tag, decode_cp1251, fix_cp1251, is_audio, is_lost, parse_rg,
-        pick_replay_gain,
+        pick_replay_gain, is_real_video, url_from_tag, CodecParameters, CODEC_ID_MJPEG, SymTrack,
     };
     use crate::library::{ReplayGain, Track};
     use lofty::prelude::*;
@@ -298,6 +391,145 @@ mod tests {
         let t = super::read(&w);
         let _ = std::fs::remove_file(&w);
         assert_eq!(t.path, w);
+    }
+
+    fn tag_with(ty: TagType, items: &[(ItemKey, &str)]) -> Tag {
+        let mut tag = Tag::new(ty);
+        for (k, v) in items {
+            tag.insert_text(*k, (*v).into());
+        }
+        tag
+    }
+
+    #[test]
+    fn url_from_tag_prefers_purl_and_skips_non_urls() {
+        let both = tag_with(
+            TagType::Mp4Ilst,
+            &[(ItemKey::PodcastUrl, "https://a/1"), (ItemKey::Comment, "https://b/2")],
+        );
+        assert_eq!(url_from_tag(&both).as_deref(), Some("https://a/1"));
+        let comment = |v: &str| url_from_tag(&tag_with(TagType::VorbisComments, &[(ItemKey::Comment, v)]));
+        assert_eq!(comment("hello"), None);
+        assert_eq!(comment("  HTTPS://x/y  ").as_deref(), Some("HTTPS://x/y"));
+        assert_eq!(comment("ftp://x"), None);
+        assert_eq!(comment("-https://x"), None);
+        assert_eq!(comment("https://x\nhttps://y"), None);
+        assert_eq!(comment(""), None);
+    }
+
+    #[test]
+    fn is_real_video_rules() {
+        use symphonia::core::codecs::audio::AudioCodecParameters;
+        use symphonia::core::codecs::video::VideoCodecParameters;
+        use symphonia::core::codecs::video::well_known::CODEC_ID_H264;
+        let video = |codec| {
+            let mut t = SymTrack::new(0);
+            t.with_codec_params(CodecParameters::Video(VideoCodecParameters { codec, ..Default::default() }));
+            t
+        };
+        assert!(is_real_video(&video(CODEC_ID_H264)));
+        assert!(!is_real_video(&video(CODEC_ID_MJPEG)));
+        let mut one = video(CODEC_ID_H264);
+        one.with_num_frames(1);
+        assert!(!is_real_video(&one));
+        let mut audio = SymTrack::new(1);
+        audio.with_codec_params(CodecParameters::Audio(AudioCodecParameters::default()));
+        assert!(!is_real_video(&audio));
+        assert!(!is_real_video(&SymTrack::new(2)));
+    }
+
+    const SINE: [&str; 4] = ["-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=1"];
+    const TESTSRC: [&str; 4] = ["-f", "lavfi", "-i", "testsrc=size=160x120:rate=25:duration=1"];
+
+    fn timed(name: &str, p: &Path) -> bool {
+        let t0 = std::time::Instant::now();
+        let v = super::has_video(p);
+        eprintln!("has_video {name}: {:?} -> {v}", t0.elapsed());
+        v
+    }
+
+    #[test]
+    fn has_video_ignores_covers() {
+        use crate::audio::decoder::fixtures::ffmpeg_fixture;
+        let Some(jpg) = ffmpeg_fixture(
+            &["-f", "lavfi", "-i", "color=c=red:size=64x64", "-frames:v", "1"],
+            "s5-cover.jpg",
+        ) else {
+            return;
+        };
+        let mut mp4 = TESTSRC.to_vec();
+        mp4.extend(["-f", "lavfi", "-i", SINE[3], "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest"]);
+        let Some(video_mp4) = ffmpeg_fixture(&mp4, "s5-video.mp4") else { return };
+        let mut webm = TESTSRC.to_vec();
+        webm.extend([
+            "-f", "lavfi", "-i", SINE[3], "-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8",
+            "-c:a", "libopus", "-shortest",
+        ]);
+        let Some(video_webm) = ffmpeg_fixture(&webm, "s5-video.webm") else { return };
+        let jpg_s = jpg.to_str().unwrap();
+        let mut cover = SINE.to_vec();
+        cover.extend([
+            "-i", jpg_s, "-map", "0:a", "-map", "1:v", "-c:a", "aac", "-c:v", "copy", "-disposition:v:0",
+            "attached_pic",
+        ]);
+        let Some(cover_mp4) = ffmpeg_fixture(&cover, "s5-cover.mp4") else { return };
+        let mut opus = SINE.to_vec();
+        opus.extend(["-ac", "2", "-c:a", "libopus", "-b:a", "96k"]);
+        let Some(opus_p) = ffmpeg_fixture(&opus, "s5-cover.opus") else { return };
+
+        let plain = timed("opus without picture", &opus_p);
+        let mut file = lofty::read_from_path(&opus_p).unwrap();
+        let bytes = std::fs::read(&jpg).unwrap();
+        let pic = lofty::picture::Picture::from_reader(&mut &bytes[..]).unwrap();
+        let tag = file.primary_tag_mut().expect("opus has a primary tag");
+        tag.push_picture(pic);
+        file.save_to_path(&opus_p, lofty::config::WriteOptions::default()).unwrap();
+        let reread = lofty::read_from_path(&opus_p).unwrap();
+        assert_eq!(reread.primary_tag().unwrap().picture_count(), 1);
+
+        let r = (
+            plain,
+            timed("opus with picture", &opus_p),
+            timed("mp4 with attached_pic", &cover_mp4),
+            timed("mp4 h264", &video_mp4),
+            timed("webm vp9", &video_webm),
+            timed("missing", Path::new("/nonexistent/khz.mp4")),
+        );
+        for f in [&jpg, &video_mp4, &video_webm, &cover_mp4, &opus_p] {
+            let _ = std::fs::remove_file(f);
+        }
+        assert_eq!(r, (false, false, false, true, true, false));
+    }
+
+    #[test]
+    fn source_url_reads_ytdlp_fields() {
+        use crate::audio::decoder::fixtures::ffmpeg_fixture;
+        const URL: &str = "https://example.com/watch?v=khz";
+        let meta = |extra: &str| -> Vec<String> {
+            let mut a: Vec<String> = SINE.iter().map(|s| s.to_string()).collect();
+            a.extend(extra.split(' ').map(String::from));
+            a.extend(["-metadata".into(), format!("purl={URL}"), "-metadata".into(), format!("comment={URL}")]);
+            a
+        };
+        for (name, codec) in [
+            ("s5-url.opus", "-c:a libopus"),
+            ("s5-url.m4a", "-c:a aac"),
+            ("s5-url.mp3", "-c:a libmp3lame"),
+        ] {
+            let args = meta(codec);
+            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            let Some(p) = ffmpeg_fixture(&refs, name) else { return };
+            let got = super::source_url(&p);
+            let _ = std::fs::remove_file(&p);
+            assert_eq!(got.as_deref(), Some(URL), "{name}");
+        }
+        let mut a = SINE.to_vec();
+        a.extend(["-c:a", "aac", "-metadata", "comment=hello"]);
+        let Some(p) = ffmpeg_fixture(&a, "s5-nourl.m4a") else { return };
+        let got = super::source_url(&p);
+        let _ = std::fs::remove_file(&p);
+        assert_eq!(got, None);
+        assert_eq!(super::source_url(Path::new("/nonexistent/x.mp3")), None);
     }
 
     #[test]
