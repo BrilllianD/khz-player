@@ -1,0 +1,3 @@
+# Video: match mpv StartFile to its load by playlist_entry_id
+
+Residual race after fb611ae (src/video/player.rs start_path): A (missing) is loaded, then B; A fails and mpv clears path before the event thread reads A's StartFile, so A's error is labelled B. The app then toasts B as failed and skip_failed skips a file that plays fine (src/app/events.rs:117-127). The same mislabel exists when the live path is already B. Rare (fast double load of a missing file). Closes only by matching StartFile/EndFile to the load through mpv's playlist_entry_id, if libmpv2 7.0.1 exposes it (EndFile carries playlist_entry_id in the C API; loadfile returns it in mpv 0.38+ only, CI has 0.37).
