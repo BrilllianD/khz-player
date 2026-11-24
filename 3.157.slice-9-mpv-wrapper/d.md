@@ -14,3 +14,7 @@ dc851b2: VideoPlayer over libmpv2, feature video, CI 24.04, tarball without vide
 
 841a207: fix wave, load start=none for zero start, mapper restarted gate removed, 20/20 video:: runs
 
+## 2026-11-24T01:44:26Z — Bronnikov Aleksandr
+
+fix2: StartFile path from load queue (live path preferred, queue fallback), races fixed, 20/20 video:: runs
+
