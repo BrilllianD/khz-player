@@ -6,3 +6,7 @@ on it
 
 4d3c199: Backend/backend_for, video routing in transport, handle_video_events, no prefetch for video
 
+## 2026-11-24T01:33:14Z — Bronnikov Aleksandr
+
+bd83650: F1 fix, leave_video sets state Stopped
+
