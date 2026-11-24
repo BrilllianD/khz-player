@@ -75,6 +75,9 @@ impl App {
         self.video = None;
         self.video_cur = None;
         self.backend = Backend::Engine;
+        // The engine was stopped by load_video and may emit no StateChanged
+        // (a failed load), so do not keep the video's state.
+        self.set_state(PlayerState::Stopped);
     }
 
     /// Switches to mpv for a new track and loads it.
