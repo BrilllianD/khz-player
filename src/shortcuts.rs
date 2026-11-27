@@ -21,6 +21,8 @@ pub enum Action {
     TogglePlaylist,
     ToggleLibrary,
     AddFiles,
+    /// Ctrl+L: download a URL with yt-dlp.
+    DownloadUrl,
     Jump,
     RemoveSelected,
     /// Q: queue or unqueue the selection.
@@ -73,6 +75,7 @@ const BINDINGS: &[(Modifiers, Key, Action)] = &[
     (Modifiers::NONE, Key::Delete, Action::RemoveSelected),
     (Modifiers::NONE, Key::Enter, Action::PlaySelected),
     (Modifiers::CTRL, Key::A, Action::SelectAll),
+    (Modifiers::CTRL, Key::L, Action::DownloadUrl),
     (Modifiers::CTRL, Key::P, Action::Settings),
     (Modifiers::CTRL, Key::T, Action::ToggleTimeDisplay),
     (Modifiers::CTRL, Key::S, Action::SleepTimer),
@@ -193,6 +196,12 @@ mod tests {
         assert!(release(false, n, Key::V).is_empty());
         assert_eq!(press(false, c, Key::S), [Action::SleepTimer]);
         assert_eq!(press(false, n, Key::S), [Action::ToggleShuffle]);
+    }
+
+    #[test]
+    fn ctrl_l_downloads() {
+        assert_eq!(press(false, Modifiers::CTRL, Key::L), [Action::DownloadUrl]);
+        assert_eq!(press(false, Modifiers::NONE, Key::L), [Action::AddFiles]);
     }
 
     #[test]

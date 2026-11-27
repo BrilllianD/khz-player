@@ -139,6 +139,7 @@ fn prompt_modal(app: &mut App, ctx: &egui::Context) {
         PromptKind::NewPlaylist => "New playlist name",
         PromptKind::RenamePlaylist(_) => "Rename playlist",
         PromptKind::SavePreset => "Save EQ preset as",
+        PromptKind::Download => "Download URL (yt-dlp)",
     };
     let mut submit = false;
     let mut cancel = false;
@@ -184,6 +185,10 @@ fn prompt_modal(app: &mut App, ctx: &egui::Context) {
             }
             PromptKind::RenamePlaylist(i) => app.rename_playlist(i, text),
             PromptKind::SavePreset => app.save_user_preset(text),
+            PromptKind::Download => {
+                let kv = app.prompt_keep_video;
+                app.start_download(&text, kv)
+            }
         }
     } else if cancel {
         app.prompt = None;

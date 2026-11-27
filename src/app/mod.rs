@@ -26,12 +26,14 @@ use crate::{fonts, m3u};
 
 
 mod events;
+mod downloads;
 mod eq;
 mod persist;
 mod playback;
 mod playlists;
 mod transport;
 
+pub use downloads::{DownloadRow, DownloadState};
 use persist::should_save;
 use playlists::{AddJob, AddRequest, AddTarget};
 
@@ -49,6 +51,7 @@ pub enum PromptKind {
     NewPlaylist,
     RenamePlaylist(usize),
     SavePreset,
+    Download,
 }
 
 #[derive(Debug, Clone)]
@@ -131,6 +134,9 @@ pub struct App {
     dialog: Option<Receiver<dialog::Picked>>,
     add_queue: std::collections::VecDeque<AddRequest>,
     add_job: Option<AddJob>,
+    dl: downloads::Downloads,
+    pub prompt_keep_video: bool,
+    pub jobs_open: bool,
 
     mpris: Mpris,
     last_mpris_pos: Instant,
@@ -280,6 +286,9 @@ impl App {
             library_cache: Default::default(),
             add_queue: Default::default(),
             add_job: None,
+            dl: Default::default(),
+            prompt_keep_video: false,
+            jobs_open: false,
             mpris,
             last_mpris_pos: Instant::now(),
             mpris_caps: None,
@@ -445,6 +454,14 @@ impl App {
                 }
             }
             Action::ShowVideo => self.show_video(),
+            Action::DownloadUrl => {
+                self.prompt_keep_video = self.cfg.download.keep_video;
+                self.prompt = Some(Prompt {
+                    kind: PromptKind::Download,
+                    text: String::new(),
+                    focus: true,
+                });
+            }
             Action::FileInfo => {
                 let pl = &self.playlists[self.active];
                 let row = pl
@@ -503,16 +520,13 @@ impl eframe::App for App {
         self.handle_sleep(now);
         self.handle_scan_events();
         self.handle_add_events();
+        self.handle_download_events();
         self.handle_dialog();
         self.handle_mpris(ctx);
         self.handle_theme(ctx);
         self.handle_drops(ctx);
 
-        if !ctx.egui_wants_keyboard_input() && self.prompt.is_none()
-            && self.jump.is_none()
-            && self.info.is_none()
-            && !self.settings_open
-        {
+        if !ctx.egui_wants_keyboard_input() && !self.modal_open() {
             for a in shortcuts::collect(ctx, self.playlist_focus) {
                 self.dispatch(ctx, a);
             }
@@ -563,6 +577,7 @@ impl eframe::App for App {
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.save_now();
+        self.cancel_running_download();
         self.t_stop();
     }
 
