@@ -1,5 +1,7 @@
 //! "File info" (Alt+3): read-only modal with the tags, format, ReplayGain and cover of one track.
 
+use std::path::PathBuf;
+
 use egui::{Id, Modal, RichText};
 
 use crate::app::App;
@@ -10,7 +12,17 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         return;
     };
     let path = t.path.clone();
-    let rows = rows(t);
+    let src_id = Id::new("info-source");
+    let cached = ctx.data(|d| d.get_temp::<(PathBuf, Option<String>)>(src_id));
+    let source = match cached {
+        Some((p, s)) if p == path => s,
+        _ => {
+            let s = crate::library::tags::source_url(&path);
+            ctx.data_mut(|d| d.insert_temp(src_id, (path.clone(), s.clone())));
+            s
+        }
+    };
+    let rows = rows(t, source.as_deref());
     app.info_cover.sync_track(ctx, Some(&path));
     let theme = app.theme.clone();
     let tex = app.info_cover.texture().map(|h| (h.id(), h.size_vec2()));
@@ -36,6 +48,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     });
     if close || resp.should_close() {
         app.info = None;
+        ctx.data_mut(|d| d.remove::<(PathBuf, Option<String>)>(src_id));
         app.info_cover.sync_track(ctx, None);
     }
 }
@@ -45,7 +58,7 @@ fn db(v: Option<f32>) -> Option<String> {
 }
 
 /// Label and value of every known field of `t`, in display order.
-pub(crate) fn rows(t: &Track) -> Vec<(&'static str, String)> {
+pub(crate) fn rows(t: &Track, source: Option<&str>) -> Vec<(&'static str, String)> {
     let mut out: Vec<(&'static str, String)> = vec![("Path", t.path.display().to_string())];
     let mut push = |k: &'static str, v: Option<String>| {
         if let Some(v) = v.filter(|v| !v.trim().is_empty()) {
@@ -54,6 +67,7 @@ pub(crate) fn rows(t: &Track) -> Vec<(&'static str, String)> {
     };
     let text = |s: &Option<String>| s.clone();
     let num = |n: Option<u32>| n.map(|n| n.to_string());
+    push("Source", source.map(String::from));
     push("Title", text(&t.title));
     push("Artist", text(&t.artist));
     push("Album", text(&t.album));
@@ -108,7 +122,7 @@ mod tests {
 
     #[test]
     fn bare_track() {
-        let r = rows(&Track::from_path("/m/a.flac".into()));
+        let r = rows(&Track::from_path("/m/a.flac".into()), None);
         let want: Vec<(&str, String)> = vec![
             ("Path", "/m/a.flac".into()),
             ("Format", "FLAC".into()),
@@ -136,7 +150,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let r = rows(&t);
+        let r = rows(&t, None);
         assert_eq!(get(&r, "Channels"), Some("stereo"));
         assert_eq!(get(&r, "Bitrate"), Some("320 kbps"));
         assert_eq!(get(&r, "Sample rate"), Some("44100 Hz"));
@@ -154,6 +168,18 @@ mod tests {
             title: Some("  ".into()),
             ..Track::from_path("/m/a.mp3".into())
         };
-        assert_eq!(get(&rows(&t), "Title"), None);
+        assert_eq!(get(&rows(&t, None), "Title"), None);
+    }
+
+    #[test]
+    fn source_row_after_path() {
+        let r = rows(&Track::from_path("/m/a.mp3".into()), Some("https://x/y"));
+        assert_eq!(r[1], ("Source", "https://x/y".to_string()));
+    }
+
+    #[test]
+    fn blank_source_omitted() {
+        let r = rows(&Track::from_path("/m/a.mp3".into()), Some("  "));
+        assert_eq!(get(&r, "Source"), None);
     }
 }

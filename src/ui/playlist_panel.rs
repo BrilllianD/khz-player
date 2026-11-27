@@ -394,6 +394,20 @@ fn footer(app: &mut App, ui: &mut Ui) {
                 });
                 ui.close();
             }
+            if ui.button("Download URL… (Ctrl+L)").clicked() {
+                app.prompt_keep_video = app.cfg.download.keep_video;
+                app.prompt = Some(Prompt {
+                    kind: PromptKind::Download,
+                    text: String::new(),
+                    focus: true,
+                });
+                ui.close();
+            }
+            let has_rows = !app.downloads().is_empty();
+            if ui.add_enabled(has_rows, egui::Button::new("Downloads…")).clicked() {
+                app.jobs_open = true;
+                ui.close();
+            }
             if ui.button("Whole library").clicked() {
                 let all: Vec<usize> = (0..app.library.len()).collect();
                 app.add_library_tracks(&all, false);
@@ -541,6 +555,8 @@ fn footer(app: &mut App, ui: &mut Ui) {
             app.after_playlist_edit();
         }
 
+        let dl = app.download_label();
+        let mut open_jobs = false;
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let pl = &app.playlists[app.active];
             let total = std::time::Duration::from_millis(pl.total_duration_ms());
@@ -559,7 +575,19 @@ fn footer(app: &mut App, ui: &mut Ui) {
                     .monospace()
                     .color(theme.text_dim),
             );
+            if let Some(s) = dl {
+                let l = ui.add(
+                    egui::Label::new(RichText::new(s).monospace().color(theme.accent))
+                        .sense(Sense::click()),
+                );
+                if l.on_hover_text("Downloads").clicked() {
+                    open_jobs = true;
+                }
+            }
         });
+        if open_jobs {
+            app.jobs_open = true;
+        }
     });
 }
 

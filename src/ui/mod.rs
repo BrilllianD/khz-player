@@ -1,6 +1,7 @@
 pub mod cover;
 pub mod eq_panel;
 pub mod info_dialog;
+pub mod jobs_dialog;
 pub mod jump_dialog;
 pub mod library_panel;
 pub mod main_panel;
@@ -123,6 +124,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     prompt_modal(app, &ctx);
     jump_dialog::show(app, &ctx);
     info_dialog::show(app, &ctx);
+    jobs_dialog::show(app, &ctx);
     settings::show(app, &ctx);
     toasts(app, &ctx);
     resize_grip(&ctx, &app.theme);
@@ -141,6 +143,7 @@ fn prompt_modal(app: &mut App, ctx: &egui::Context) {
         PromptKind::SavePreset => "Save EQ preset as",
         PromptKind::Download => "Download URL (yt-dlp)",
     };
+    let keep_label = format!("Keep video (mp4, up to {}p)", app.cfg.download.max_height);
     let mut submit = false;
     let mut cancel = false;
     let resp = Modal::new(Id::new("prompt")).show(ctx, |ui| {
@@ -157,6 +160,9 @@ fn prompt_modal(app: &mut App, ctx: &egui::Context) {
         }
         if te.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             submit = true;
+        }
+        if matches!(prompt.kind, PromptKind::Download) {
+            ui.checkbox(&mut app.prompt_keep_video, keep_label.as_str());
         }
         ui.horizontal(|ui| {
             if ui.button("OK").clicked() {

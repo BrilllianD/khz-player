@@ -1,4 +1,4 @@
-//! Settings window (Ctrl+P): a section list (Library, Playback, Audio, Appearance) and
+//! Settings window (Ctrl+P): a section list (Library, Playback, Audio, Appearance, Downloads) and
 //! one function per section.
 
 use std::path::{Path, PathBuf};
@@ -15,17 +15,23 @@ enum Section {
     Playback,
     Audio,
     Appearance,
+    Downloads,
 }
 
-const SECTIONS: [(Section, &str); 4] = [
+const SECTIONS: [(Section, &str); 5] = [
     (Section::Library, "Library"),
     (Section::Playback, "Playback"),
     (Section::Audio, "Audio"),
     (Section::Appearance, "Appearance"),
+    (Section::Downloads, "Downloads"),
 ];
 
 fn font_id() -> Id {
     Id::new("settings-font")
+}
+
+fn dl_folder_id() -> Id {
+    Id::new("settings-dl-folder")
 }
 
 fn devices_id() -> Id {
@@ -61,6 +67,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 Section::Playback => playback(app, ui),
                 Section::Audio => audio(app, ui),
                 Section::Appearance => appearance(app, ui),
+                Section::Downloads => downloads(app, ui),
             });
         });
 
@@ -75,6 +82,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         app.settings_open = false;
         ctx.data_mut(|d| {
             d.remove::<String>(font_id());
+            d.remove::<String>(dl_folder_id());
             d.remove::<Vec<(String, String)>>(devices_id());
         });
     }
@@ -341,4 +349,64 @@ fn appearance(app: &mut App, ui: &mut egui::Ui) {
         ui.label(RichText::new(msg).color(app.theme.warn));
     }
     ui.ctx().data_mut(|d| d.insert_temp(font_id(), font_text));
+}
+
+fn downloads(app: &mut App, ui: &mut egui::Ui) {
+    let dim = app.theme.text_dim;
+    let mut folder: String = ui.ctx().data_mut(|d| {
+        d.get_temp_mut_or_insert_with(dl_folder_id(), || {
+            app.cfg
+                .download
+                .folder
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
+        })
+        .clone()
+    });
+    ui.label("Download folder");
+    let te = ui.add(
+        egui::TextEdit::singleline(&mut folder)
+            .hint_text("empty = <first library folder>/Downloads")
+            .desired_width(f32::INFINITY),
+    );
+    if te.changed() {
+        let t = folder.trim();
+        app.cfg.download.folder = (!t.is_empty()).then(|| PathBuf::from(t));
+        app.mark_cfg();
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(dl_folder_id(), folder));
+    if ui
+        .checkbox(
+            &mut app.cfg.download.keep_video,
+            "Keep video by default (prompt checkbox)",
+        )
+        .changed()
+    {
+        app.mark_cfg();
+    }
+    ui.horizontal(|ui| {
+        ui.label("Highest video height");
+        let mut h = app.cfg.download.max_height;
+        if ui
+            .add(egui::DragValue::new(&mut h).range(144..=4320).suffix("p"))
+            .changed()
+        {
+            app.cfg.download.max_height = h;
+            app.mark_cfg();
+        }
+    });
+    if ui
+        .checkbox(&mut app.cfg.download.playlist, "Download whole playlists")
+        .changed()
+    {
+        app.mark_cfg();
+    }
+    ui.label(RichText::new("Off: a playlist URL downloads the linked item only.").color(dim));
+    ui.separator();
+    ui.label(RichText::new("Tools").strong());
+    let tools = app.tool_status().map(super::jobs_dialog::tool_lines);
+    let theme = app.theme.clone();
+    super::jobs_dialog::tools_ui(ui, tools, &theme);
+    ui.label(RichText::new("Your yt-dlp config file applies.").color(dim));
 }
