@@ -4,6 +4,7 @@ pub mod app;
 pub mod audio;
 pub mod config;
 pub mod dialog;
+pub mod download;
 pub mod eq_presets;
 pub mod fonts;
 pub mod job;

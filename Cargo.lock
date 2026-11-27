@@ -1723,6 +1723,7 @@ dependencies = [
  "egui",
  "futures-lite",
  "image",
+ "libc",
  "libmpv2",
  "lofty",
  "mpris-server",

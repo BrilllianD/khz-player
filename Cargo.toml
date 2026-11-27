@@ -26,6 +26,7 @@ serde = { version = "1", features = ["derive"] }
 directories = "6.0"
 notify = "8.2"
 crossbeam-channel = "0.5"
+libc = "0.2"
 mpris-server = "0.10"
 futures-lite = "2"
 async-channel = "2"
