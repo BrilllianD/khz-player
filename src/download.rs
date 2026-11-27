@@ -6,6 +6,10 @@
 //! R4 a repeated download still prints `KHZ|F`: no `--force-overwrites`. Audio `.opus`, AAC
 //! only `.m4a`, video `.mp4`. Postprocessors: ExtractAudio, FixupM4a, Merger, Metadata,
 //! EmbedThumbnail, MoveFiles.
+//!
+//! Event order: stdout and stderr are read by two threads, so order holds only within one
+//! stream. A `Stage` (stderr) can arrive after the `File` (stdout) of the same item; consumers
+//! must tolerate that.
 
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read};
@@ -92,10 +96,7 @@ pub fn probe_tools(tools: &Tools) -> ToolStatus {
 }
 
 fn probe_one(bin: &Path, flag: &str) -> Result<String, String> {
-    let out = Command::new(bin)
-        .arg(flag)
-        .stdin(Stdio::null())
-        .output()
+    let out = retry_busy(|| Command::new(bin).arg(flag).stdin(Stdio::null()).output())
         .map_err(|e| e.to_string())?;
     if out.status.success() {
         let text = String::from_utf8_lossy(&out.stdout);
@@ -260,19 +261,12 @@ fn pump<R: Read + Send + 'static>(r: R, tx: crossbeam_channel::Sender<String>) {
     });
 }
 
-fn spawn_child(tools: &Tools, args: &[OsString]) -> std::io::Result<std::process::Child> {
+/// Runs `make` until it stops failing with ETXTBSY: a script written a moment ago can still be
+/// open for write in another thread's fork.
+fn retry_busy<T>(mut make: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
     let mut tries = 0;
     loop {
-        let r = Command::new(&tools.ytdlp)
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .env("PYTHONUNBUFFERED", "1")
-            .process_group(0)
-            .spawn();
-        match r {
-            // A script written a moment ago can still be open for write in another thread's fork.
+        match make() {
             Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) && tries < 5 => {
                 tries += 1;
                 std::thread::sleep(Duration::from_millis(20));
@@ -280,6 +274,19 @@ fn spawn_child(tools: &Tools, args: &[OsString]) -> std::io::Result<std::process
             other => return other,
         }
     }
+}
+
+fn spawn_child(tools: &Tools, args: &[OsString]) -> std::io::Result<std::process::Child> {
+    retry_busy(|| {
+        Command::new(&tools.ytdlp)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .env("PYTHONUNBUFFERED", "1")
+            .process_group(0)
+            .spawn()
+    })
 }
 
 /// Starts the download on a background job. Exactly one terminal event ends it.
@@ -577,18 +584,16 @@ mod tests {
         r.playlist = true;
         r.max_height = 720;
         let a = strs(&build_args(&r, Path::new("/t/j")));
-        assert!(
-            a.windows(2)
-                .any(|w| w == ["-f", "bv*[height<=?720]+ba/b[height<=?720]"])
-        );
+        assert!(a
+            .windows(2)
+            .any(|w| w == ["-f", "bv*[height<=?720]+ba/b[height<=?720]"]));
         assert!(a.windows(2).any(|w| w == ["-S", "vcodec:h264,acodec:aac"]));
         assert!(a.windows(2).any(|w| w == ["--merge-output-format", "mp4"]));
         assert!(a.iter().any(|x| x == "--yes-playlist"));
         assert!(a.iter().any(|x| x == "--embed-thumbnail"));
-        assert!(
-            !a.iter()
-                .any(|x| x == "-x" || x == "--no-playlist" || x == "--ignore-config")
-        );
+        assert!(!a
+            .iter()
+            .any(|x| x == "-x" || x == "--no-playlist" || x == "--ignore-config"));
         assert_eq!(a.last().unwrap(), "https://example.com/v");
     }
 
@@ -635,7 +640,8 @@ exit 0"#,
         );
         let evs = drain(&mut job);
         let file = dest.join("a.opus");
-        assert_eq!(evs.first(), Some(&DownloadEvent::Title("Song".into())));
+        // Title (stdout) and Progress (stderr) come from two pump threads: no cross-stream order.
+        assert!(evs.contains(&DownloadEvent::Title("Song".into())));
         assert!(evs.contains(&DownloadEvent::Progress {
             percent: Some(50.0),
             eta_secs: Some(3)
