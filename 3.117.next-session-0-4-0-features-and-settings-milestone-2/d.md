@@ -10,3 +10,7 @@ Slices 1-11 landed and reviewed (9 split into 9a/9b), main 0cacccd..04cbc8e, 235
 
 Blue minors fixed 04cbc8e..3fbc5d4 (241 tests). Release steps and 0.5.0 plan: yman 119, plan file ~/.claude/plans/elegant-noodling-papert.md.
 
+## 2026-11-27T21:15:40Z — Bronnikov Aleksandr
+
+Still doing: features landed, release 0.4.0 waits for the manual checks (owned by 119). Note: CHANGELOG.md has only an Unreleased section for Part C; the milestone 2 features (ReplayGain, output device, volume taper, sleep timer, cover, notifications, settings) have no changelog entries yet.
+
