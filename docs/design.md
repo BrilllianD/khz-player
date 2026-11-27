@@ -56,6 +56,13 @@ Key choices: glow over wgpu (compile time, binary size); own audio engine (symph
 src/
   main.rs            tracing init, load config, spawn engine/mpris/theme-watcher, eframe::run_native
   app.rs             App (eframe::App): owns state, drains event channels, dispatches to ui/*
+  job.rs             shared background job: named thread, event channel, cancel, `Poll::Lost`
+  download.rs        yt-dlp argv, `KHZ|` line parser, process-group cancel, per-job temp dir, tool probe
+  app/downloads.rs   FIFO queue, one running job, library upsert or playlist-only, flush after scan
+  app/transport.rs   `Backend` Engine/Video, `t_*` transport calls, only place that sends engine commands
+  video/mod.rs       VideoPlayer API, VideoEvent
+  video/events.rs    pure mpv event mapping, volume and device mapping
+  video/player.rs    libmpv core with its own window, app-id `khz-player-video`; stub without feature `video`
   config.rs          Config (serde) load/save ~/.config/khz-player/config.toml via `directories`
   theme.rs           Theme struct, lenient Omarchy colors.toml parser, Winamp fallback, apply to egui Style
   theme_watch.rs     notify watcher on ~/.local/state/omarchy/current/ (parent dir, not symlink target), 250ms debounce
@@ -63,16 +70,16 @@ src/
   audio/mod.rs       Command/Event enums, PlayerState, AudioHandle
   audio/shared.rs    Arc<Shared>: atomics (position_frames, flush, DspParams, generation)
   audio/engine.rs    decode thread: state machine, decoder lifecycle, prefetch next, seek, feed ring
-  audio/decoder.rs   symphonia 0.6 wrapper: open, next_frames (interleaved f32), seek
+  audio/decoder.rs   symphonia 0.6 wrapper: open (own CodecRegistry with libopus adapter), next_frames (interleaved f32), seek
   audio/resample.rs  rubato Fft wrapper, bypass when track rate == device rate
   audio/output.rs    cpal stream at device default rate; realtime callback: ring -> EQ -> vol/bal -> spectrum tap
   audio/dsp.rs       Biquad (RBJ peaking), Equalizer (10 bands x 2 ch, preamp, smoothing), volume/balance
   audio/spectrum.rs  UI-side FFT: Hann, realfft 2048, 20 log bands, dB, fall-off + peak hold; FFT only in Bars mode; recent(n) for the scope
   eq_presets.rs      Winamp preset table, user presets TOML load/save
   library/mod.rs     Track struct, LibraryHandle
-  library/db.rs      rusqlite open/migrate, tracks + playlists CRUD
-  library/scanner.rs background thread: walkdir, mtime/size compare, lofty, batched inserts, progress
-  library/tags.rs    lofty -> Track (title fallback = file stem)
+  library/db.rs      rusqlite open/migrate, tracks + playlists CRUD, + `upsert_one`
+  library/scanner.rs on `job::Job`: walkdir, mtime/size compare, lofty, batched inserts, progress
+  library/tags.rs    lofty -> Track (title fallback = file stem), + `source_url`, `has_video`
   library/art.rs     cover lookup: embedded front/first picture (cached by hash) or cover/folder/front.jpg|png; cache ~/.cache/khz-player/art
   ui/cover.rs        image decode (jpeg/png, <=256 px) off the UI thread, CoverTexture
   playlist.rs        in-memory Playlist (Vec<Track>, cursor, shuffle order, repeat, play queue (session only)), next/prev
@@ -84,10 +91,11 @@ src/
   ui/widgets.rs      custom painters: digits (seven-segment LCD), marquee, spectrum, scope, led_toggle, winamp_button
   ui/eq_panel.rs     ON/AUTO, preamp + 10 vertical sliders, presets ComboBox, save/delete preset
   ui/playlist_panel.rs tabs, list, ADD/REM/SEL/MISC/LIST menus, drag-drop, dbl-click
-  ui/info_dialog.rs  File info modal (Alt+3, row menus) over a cloned Track; second CoverTexture
+  ui/info_dialog.rs  File info modal (Alt+3, row menus, Source row) over a cloned Track; second CoverTexture
   ui/library_panel.rs search, rescan + progress, Artist > Album > Track tree, add to playlist
+  ui/jobs_dialog.rs  Downloads modal: rows, Cancel, tool versions
   ui/jump_dialog.rs  J: filter current playlist, Enter plays
-  ui/settings.rs     Ctrl+P Modal: section list (Library + clear cover cache, Playback, Audio + output device, Appearance + show cover + visualization + double size), one fn per section
+  ui/settings.rs     Ctrl+P Modal: section list (Library + clear cover cache, Playback + video toggle, Audio + output device, Appearance + show cover + visualization + double size, Downloads), one fn per section
 ```
 
 ## Threading
@@ -97,7 +105,10 @@ src/
 | UI (eframe) | drains `Receiver<Event>`, `ScanEvent`, `ThemeEvent`; sends `Command`, `MprisUpdate` | crossbeam-channel |
 | audio-engine | `recv_timeout(2-5ms)` loop, decode + resample, push to `rtrb::Producer<f32>` | sends `Event` + `ctx.request_repaint()` |
 | cpal callback | `rtrb::Consumer` -> DSP -> out; spectrum tap `rtrb::Producer` (cap 8192, drop if full) | reads `Arc<Shared>` atomics only; no locks/alloc/log |
-| scanner | own rusqlite Connection, WAL, 200-row transactions | `ScanEvent::{Progress, Done(Vec<Track>, walk errors), Error}` |
+| scanner (and adder) | on `job::Job`; own rusqlite Connection, WAL, 200-row transactions | `ScanEvent::{Progress, Done(Vec<Track>, walk errors), Error}` |
+| download | job; yt-dlp child in its own process group, two pipe readers | `DownloadEvent` via `job::Sink` |
+| tool-probe | job; runs `yt-dlp`/`ffmpeg` version probes | `ToolStatus` |
+| mpv-events | long-lived, not a job; mpv event loop | `VideoEvent` over crossbeam + repaint |
 | mpris | `zbus::block_on(zip(player.run(), update_loop))` | pushes `Command`; `async_channel::Receiver<MprisUpdate>` |
 | theme-watch | notify callback, debounce | `ThemeEvent::Changed` + repaint |
 
@@ -167,7 +178,7 @@ Omarchy mapping: bg=background, bg_dark=dark_background, bg_darker=darker_backgr
 Watch parent `~/.local/state/omarchy/current/` NonRecursive (symlink swapped atomically); re-resolve path on each reload.
 
 ### Shortcuts (only when `!ctx.wants_keyboard_input()`)
-Z prev, X play, C pause, V stop, B next, Space toggle, L add files (file dialog), J jump dialog, Left/Right ±5 s, Up/Down vol ±2% when the playlist is not focused (while focused: Up/Down cursor, Shift extends, PgUp/PgDn page, Home/End ends, Ctrl+Up/Down reorder selected; `PLAYLIST_BINDINGS`, consumed first; focus is set by a primary press in the CentralPanel), R repeat cycle Off/All/One, S shuffle, Alt+G EQ, Alt+E playlist, Alt+L library, Alt+3 file info, Delete remove selected, Enter play the cursor row (or first selected), Ctrl+A select all, Ctrl+T elapsed/remaining time, Ctrl+V stop after current (bound on release: egui-winit turns the press into Paste), Ctrl+S sleep timer, Ctrl+D double size.
+Z prev, X play, C pause, V stop, B next, Space toggle, L add files (file dialog), J jump dialog, Left/Right ±5 s, Up/Down vol ±2% when the playlist is not focused (while focused: Up/Down cursor, Shift extends, PgUp/PgDn page, Home/End ends, Ctrl+Up/Down reorder selected; `PLAYLIST_BINDINGS`, consumed first; focus is set by a primary press in the CentralPanel), R repeat cycle Off/All/One, S shuffle, Alt+G EQ, Alt+E playlist, Alt+L library, Alt+3 file info, Delete remove selected, Enter play the cursor row (or first selected), Ctrl+A select all, Ctrl+T elapsed/remaining time, Ctrl+V stop after current (bound on release: egui-winit turns the press into Paste), Ctrl+S sleep timer, Ctrl+D double size, Ctrl+L download URL, Alt+V raise video window.
 
 ## Persistence
 
@@ -186,7 +197,7 @@ CREATE TABLE eq_auto (path TEXT PRIMARY KEY, preset TEXT NOT NULL);
 Scanner: clear `seen`, set per visit, delete `seen=0`. Playlist item metadata resolved from `tracks` by path, else lofty on demand.
 Schema v6 adds ReplayGain columns (filled from the `REPLAYGAIN_*` tags, NULL when absent or unparsable) and sets `mtime = -1`. -1 matches no file stamp, so `App::new` (`needs_rescan`) runs one background rescan that re-reads every row. A build older than the DB schema refuses to open it.
 
-`~/.config/khz-player/config.toml`: version, library_roots, font_path, volume, balance, shuffle, repeat (off|all|one), last_playlist, last_track_index, show_eq/show_playlist/show_library, time_remaining, animation_fps (10-60, default 30), `[eq] enabled, auto, preamp, bands[10], preset`, `[window] x y w h`. Save debounced 1 s + on exit.
+`~/.config/khz-player/config.toml`: version, library_roots, font_path, volume, balance, shuffle, repeat (off|all|one), last_playlist, last_track_index, show_eq/show_playlist/show_library, time_remaining, animation_fps (10-60, default 30), `[eq] enabled, auto, preamp, bands[10], preset`, `[window] x y w h`, `[download] folder, keep_video, max_height (144-4320, default 1080), playlist`, `[video] enabled`. Save debounced 1 s + on exit.
 
 ## Phases (each ends runnable)
 

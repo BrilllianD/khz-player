@@ -9,8 +9,12 @@ A Winamp-classic style music player for Linux, written in Rust.
   remembers the preset chosen for each track.
 - Several playlists, stored in SQLite; M3U import and export; a play queue (Q).
 - Media library scanned from your music folders, with a search box.
-- Gapless playback (can be turned off); MP3 (and MP1/MP2), FLAC, Ogg Vorbis, AAC and ALAC in
-  M4A/MP4, WAV and AIFF. Opus, WavPack, APE and Musepack are not supported.
+- Gapless playback (can be turned off); MP3 (and MP1/MP2), FLAC, Ogg Vorbis, Opus (`.opus`, and
+  Opus in `.webm`), AAC and ALAC in M4A/MP4, WAV and AIFF. WavPack, APE and Musepack are not supported.
+- Download from YouTube and other sites with yt-dlp (Ctrl+L): audio keeps its original codec
+  (Opus, AAC), or keep the video as `.mp4`; finished files join the library and the playlist.
+- Video files play in a separate mpv window (Alt+V raises it); their sound goes through mpv, so
+  EQ, ReplayGain, balance, spectrum and gapless do not apply to them.
 - ReplayGain (track, album or auto) with preamp and a gain for untagged tracks; peaks are never clipped.
 - Output device choice (Settings, Audio): any PulseAudio sink, or the system default.
 - MPRIS, so media keys and desktop widgets can control it, with cover art.
@@ -32,8 +36,16 @@ backend (without it, audio falls back to ALSA, and on PipeWire that goes
 through `pipewire-alsa`) and a Wayland
 or X11 desktop with OpenGL. A D-Bus session bus is optional, for MPRIS.
 
+Downloads need `yt-dlp` and `ffmpeg` on `PATH`. Optionally install mutagen
+(`python-mutagen` on Arch, `python3-mutagen` on Debian, Ubuntu and Fedora) so yt-dlp can embed
+the cover into `.opus` files.
+
+The release tarball is built without video support (Ubuntu 22.04 has only libmpv 1.x), so
+video files play as audio there and Settings > Playback says video is unavailable. Build from
+source (or use a distribution package) for the video window.
+
 ```sh
-v=0.2.1
+v=0.3.1
 curl -LO https://github.com/BrilllianD/khz-player/releases/download/v$v/khz-player-$v-x86_64-linux.tar.gz
 curl -LO https://github.com/BrilllianD/khz-player/releases/download/v$v/khz-player-$v-x86_64-linux.tar.gz.sha256
 sha256sum -c khz-player-$v-x86_64-linux.tar.gz.sha256
@@ -49,7 +61,12 @@ in `~/.config/khz-player` and `~/.local/share/khz-player` are kept.
 
 ## Build and run
 
-Needs Rust 1.98 or newer, plus ALSA development headers (`alsa-lib`).
+Needs Rust 1.98 or newer, plus ALSA development headers (`alsa-lib`), `cmake` and a C
+compiler (the bundled libopus is built from source), `pkg-config`, and libmpv with client
+API 2, i.e. mpv 0.35 or newer (`mpv` on Arch, `libmpv-dev` on Debian 13 and Ubuntu 24.04+,
+`mpv-devel` on Fedora). Without libmpv, build with
+`cargo build --release --no-default-features` (or add `--no-default-features` to
+`cargo install`); video files then play as audio.
 Audio uses the PulseAudio protocol (`pipewire-pulse`) when it is available and
 ALSA otherwise. No libpulse headers are needed.
 
@@ -82,7 +99,7 @@ there.
 
 `scripts/package.sh` builds the release tarball into `dist/`. It needs Docker
 and compiles inside Ubuntu 22.04, so the binary does not depend on the host's
-newer glibc.
+newer glibc, and without the `video` feature.
 
 ## Keyboard
 
@@ -95,6 +112,7 @@ newer glibc.
 | `R` | Cycle repeat (off, all, one) |
 | `S` | Toggle shuffle |
 | `L` | Add files (opens the file dialog) |
+| `Ctrl+L` | Download a URL with yt-dlp |
 | `J` | Jump to a track by name |
 | `Q` | Queue / unqueue the selected tracks (played next, in order; Ctrl+Enter in the jump dialog) |
 | `↑` `↓` (playlist focused) | Move the cursor |
@@ -109,6 +127,7 @@ newer glibc.
 | `Ctrl+S` | Start / cancel the sleep timer (fades out over 10 s, then pauses) |
 | `Ctrl+D` | Double size (toggle) |
 | `Alt+G` / `Alt+E` / `Alt+L` | Show or hide equalizer / playlist / library |
+| `Alt+V` | Raise the video window |
 | `Alt+3` | File info of the cursor track (or the playing one) |
 
 Clicking the playlist gives it keyboard focus (its border turns the accent
@@ -132,6 +151,23 @@ the totals. Its menus hold the rest: ADD, REM (remove missing files,
 duplicates by path or by tags), SEL, MISC (sort, reverse, randomize) and LIST
 (new, rename, delete, import and export M3U).
 
+## Download
+
+`Ctrl+L`, or ADD > "Download URL… (Ctrl+L)", opens the URL prompt. Its checkbox "Keep video
+(mp4, up to …p)" keeps the video (H.264 + AAC preferred, height capped by `max_height`);
+unchecked, only the audio is downloaded, in the site's own codec (no transcode).
+
+- One download runs at a time, the rest wait. The footer shows `DL 42%`; click it, or use ADD >
+  "Downloads…", for the list with Cancel and the yt-dlp and ffmpeg versions.
+- Destination: `[download] folder`, else `<first library folder>/Downloads`, else
+  `~/Music/Downloads`. A file inside a library folder goes into the library; every file is
+  appended to the current playlist, never started. A file outside every library folder goes to
+  the playlist only. The file info dialog shows the "Source" URL.
+- Your yt-dlp config (`/etc/yt-dlp.conf`, `~/.config/yt-dlp/config`) applies. khz-player always
+  passes the options it reads progress from, so a config cannot break it, but options that
+  write extra files (`-k`/`--keep-video`, `--write-info-json`, `--write-thumbnail`,
+  `--write-subs`) leave those files in the download folder.
+
 ## Files
 
 | Path | Contents |
@@ -150,10 +186,16 @@ Useful keys in `config.toml`:
   default and uses its icons when found.
 - `follow_omarchy_theme`: `true` (default) follows the current Omarchy theme; `false`
   uses the Winamp colours.
+- `[download]`: `folder` (default: `<first library folder>/Downloads`), `keep_video` (default
+  `false`, the prompt checkbox default), `max_height` (default `1080`, 144 to 4320) and
+  `playlist` (default `false`: a playlist URL downloads only the linked item).
+- `[video]`: `enabled` (default `true`; `false` plays video files as audio through the
+  player's own engine).
 
-`Ctrl+P` (or the gear in the title bar) opens the settings window. It has four
-sections: Library (library folders, rescan, clear cover cache), Playback (gapless, sleep timer), Audio (ReplayGain, output device), and Appearance (theme,
-animation frame rate, remaining-time display, show cover, visualization, double size, font file).
+`Ctrl+P` (or the gear in the title bar) opens the settings window. It has five
+sections: Library (library folders, rescan, clear cover cache), Playback (gapless, sleep timer, "Play video in a separate window"), Audio (ReplayGain, output device), Appearance (theme,
+animation frame rate, remaining-time display, show cover, visualization, double size, font file)
+and Downloads (folder, keep video default, highest video height, whole playlists, tool versions).
 
 ## Hyprland
 
@@ -168,6 +210,18 @@ Without the Omarchy helper:
 
 ```lua
 hl.window_rule({ match = { class = "^(khz-player)$" }, float = true, size = { 560, 760 } })
+```
+
+The video window has its own app-id, `khz-player-video`:
+
+```lua
+o.window("^(khz-player-video)$", { float = true, size = { 960, 540 } })
+```
+
+Without the Omarchy helper:
+
+```lua
+hl.window_rule({ match = { class = "^(khz-player-video)$" }, float = true, size = { 960, 540 } })
 ```
 
 ## MPRIS

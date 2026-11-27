@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+Native Opus playback, downloads with yt-dlp, and video in a separate mpv window.
+
+- Opus plays natively: `.opus` files and Opus in `.webm`.
+- `Ctrl+L` downloads a URL with yt-dlp: audio in its original codec, or `.mp4`
+  video. Downloads queue, the footer shows progress, and a Downloads window
+  (ADD > "Downloads…") lists them with Cancel. Finished files enter the library
+  and the playlist. Settings has a new Downloads section; your yt-dlp config
+  applies.
+- The file info dialog shows a "Source" row with the URL a file was downloaded from.
+- Video files play in a separate mpv window (`Alt+V` raises it), with a toggle
+  in Settings > Playback. Their sound goes through mpv, so EQ, ReplayGain,
+  balance, spectrum and gapless do not apply; closing the window stops the track.
+- The release tarball is built without video support: video files play as audio.
+- Building needs `cmake` and libmpv (mpv 0.35+), or `--no-default-features`.
+
 ## 0.3.1 — 2026-11-15
 
 Playback survives a PipeWire restart, seeking no longer clicks, and the
